@@ -263,3 +263,24 @@ export async function loadAssets(
     (p: number) => onProgress(p),
   );
 }
+
+/**
+ * Lazily load the pirates atlas on demand (e.g., when entering a pirates-kingdom
+ * level for the first time).  Safe to call multiple times — Pixi's asset cache
+ * ensures the atlas is only fetched once.
+ *
+ * Usage:
+ *   await loadPiratesAssets();
+ *   // Texture frames are now accessible via getPirateTexture() / getPirateTextureByIndex()
+ */
+export async function loadPiratesAssets(): Promise<void> {
+  const alias = "pirates_atlas";
+  // Skip if already cached.
+  if (Assets.get(alias)) return;
+
+  Assets.add({
+    alias,
+    src: `${import.meta.env.BASE_URL}assets/pirates_atlas/pirates_atlas.json`,
+  });
+  await Assets.load(alias);
+}

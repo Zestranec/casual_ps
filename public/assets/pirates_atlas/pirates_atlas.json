@@ -1,0 +1,235 @@
+{
+  "frames": {
+    "anchor.png": {
+      "frame": {
+        "x": 4,
+        "y": 4,
+        "w": 200,
+        "h": 200
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200
+      },
+      "sourceSize": {
+        "w": 200,
+        "h": 200
+      }
+    },
+    "bottle-of-rome.png": {
+      "frame": {
+        "x": 208,
+        "y": 4,
+        "w": 200,
+        "h": 200
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200
+      },
+      "sourceSize": {
+        "w": 200,
+        "h": 200
+      }
+    },
+    "compass.png": {
+      "frame": {
+        "x": 4,
+        "y": 208,
+        "w": 200,
+        "h": 200
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200
+      },
+      "sourceSize": {
+        "w": 200,
+        "h": 200
+      }
+    },
+    "girl-pirate-pistol.png": {
+      "frame": {
+        "x": 208,
+        "y": 208,
+        "w": 200,
+        "h": 200
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200
+      },
+      "sourceSize": {
+        "w": 200,
+        "h": 200
+      }
+    },
+    "girl_pirate_with_monkey.png": {
+      "frame": {
+        "x": 412,
+        "y": 4,
+        "w": 200,
+        "h": 200
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200
+      },
+      "sourceSize": {
+        "w": 200,
+        "h": 200
+      }
+    },
+    "main-hero.png": {
+      "frame": {
+        "x": 412,
+        "y": 208,
+        "w": 200,
+        "h": 200
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200
+      },
+      "sourceSize": {
+        "w": 200,
+        "h": 200
+      }
+    },
+    "pirate-officer.png": {
+      "frame": {
+        "x": 4,
+        "y": 412,
+        "w": 200,
+        "h": 200
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200
+      },
+      "sourceSize": {
+        "w": 200,
+        "h": 200
+      }
+    },
+    "pirate-with-tattoo-hook.png": {
+      "frame": {
+        "x": 208,
+        "y": 412,
+        "w": 200,
+        "h": 200
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200
+      },
+      "sourceSize": {
+        "w": 200,
+        "h": 200
+      }
+    },
+    "pistols.png": {
+      "frame": {
+        "x": 412,
+        "y": 412,
+        "w": 200,
+        "h": 200
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200
+      },
+      "sourceSize": {
+        "w": 200,
+        "h": 200
+      }
+    },
+    "steering-wheel.png": {
+      "frame": {
+        "x": 616,
+        "y": 4,
+        "w": 200,
+        "h": 200
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200
+      },
+      "sourceSize": {
+        "w": 200,
+        "h": 200
+      }
+    },
+    "wild-coin.png": {
+      "frame": {
+        "x": 616,
+        "y": 208,
+        "w": 200,
+        "h": 200
+      },
+      "rotated": false,
+      "trimmed": false,
+      "spriteSourceSize": {
+        "x": 0,
+        "y": 0,
+        "w": 200,
+        "h": 200
+      },
+      "sourceSize": {
+        "w": 200,
+        "h": 200
+      }
+    }
+  },
+  "meta": {
+    "app": "buildPiratesAtlas",
+    "version": "1.0",
+    "image": "pirates_atlas.png",
+    "format": "RGBA8888",
+    "size": {
+      "w": 1024,
+      "h": 1024
+    },
+    "scale": "1"
+  }
+}
