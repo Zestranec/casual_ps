@@ -5,7 +5,7 @@ import {
 import { GameStateMachine, GameState } from "./core/GameStateMachine";
 import { getNearMissHint } from "./game/CardEvaluator";
 import { CARDS } from "./config/cards";
-import { TapeSlotModel, REEL_COUNT } from "./game/TapeSlotModel";
+import { TapeSlotModel } from "./game/TapeSlotModel";
 import { VisibleDigits } from "./game/TapeReel";
 import { getSymbolTexture } from "./game/CardTextures";
 import { ReelAnimator, ReelViewRef } from "./game/ReelAnimator";
@@ -16,84 +16,94 @@ import { EconomyController } from "./game/EconomyController";
 import { DevDrawer } from "./ui/DevDrawer";
 import { RunPanel } from "./ui/RunPanel";
 import { CardGrid } from "./ui/CardGrid";
-import { BetPanel } from "./ui/BetPanel";
 import { ToastMessage } from "./ui/ToastMessage";
 import { LoadingScreen, loadAssets, logoUrl } from "./ui/LoadingScreen";
 import { RulesScreen, rulesAlreadySeen } from "./ui/RulesScreen";
+import { LevelSelectScreen } from "./ui/LevelSelectScreen";
+import { LivesDisplay } from "./ui/LivesDisplay";
 import { computeLayout } from "./ui/layouts";
+import {
+  DEFAULT_LEVEL_CONFIG,
+  getLevelConfig,
+  MAX_REEL_COUNT,
+  KINGDOM_NAMES,
+  LEVELS_PER_KINGDOM,
+} from "./config/levelConfigs";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // REEL VISUAL CONSTANTS
 // ─────────────────────────────────────────────────────────────────────────────
-const REEL_WIDTH      = 120; // wider for poker card text (e.g. "A♥", "K♠", "★")
+const REEL_WIDTH      = 120;
 const REEL_HEIGHT     = 160;
 const REEL_GAP        = 8;
-const REEL_AREA_WIDTH = REEL_COUNT * REEL_WIDTH + (REEL_COUNT - 1) * REEL_GAP;
+// View slots are pre-built for the maximum reel count across all levels so
+// that any level can start without rebuilding the Pixi hierarchy.
+const REEL_AREA_WIDTH = MAX_REEL_COUNT * REEL_WIDTH + (MAX_REEL_COUNT - 1) * REEL_GAP;
 
-// ── Per-reel control sizes ────────────────────────────────────────────────────
-const NUDGE_H   = 18;  // nudge triangle button height
-const NUDGE_GAP = 3;   // gap between nudge button and reel box
-const LOCK_H    = 16;  // lock button height (below reel)
+const NUDGE_H   = 18;
+const NUDGE_GAP = 3;
+const LOCK_H    = 16;
 
-// Controls above and below each reel box:
-const CTRL_ABOVE  = NUDGE_H + NUDGE_GAP;              // 21 px
-const CTRL_BELOW  = NUDGE_GAP + NUDGE_H + 3 + LOCK_H; // 40 px  (gap+nudge+gap+lock)
-const REEL_SLOT_H = CTRL_ABOVE + REEL_HEIGHT + CTRL_BELOW; // 221 px per slot
+const CTRL_ABOVE  = NUDGE_H + NUDGE_GAP;
+const CTRL_BELOW  = NUDGE_GAP + NUDGE_H + 3 + LOCK_H;
+const REEL_SLOT_H = CTRL_ABOVE + REEL_HEIGHT + CTRL_BELOW;
 
-// Symbol sprite dimensions — must match SYMBOL_W / SYMBOL_H in ReelAnimator.ts.
-const SYMBOL_W = 96; // card width — centred within REEL_WIDTH
-const SYMBOL_H = 96; // card height — partial visibility via container mask
+const SYMBOL_W = 96;
+const SYMBOL_H = 96;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // LAYOUT CONSTANTS
-//
-//   gameRoot.y = PAD_TOP = 16
-//
-//   topBlock (y=0)
-//   ├── title              y = 38  (anchor-bottom; text above; 4 px gap to slot top)
-//   ├── reelsContainer     y = REEL_SLOT_Y = 42
-//   │     └── slot[i]        y = 0 within reelsContainer
-//   │           ├── nudgeUp      y = 0
-//   │           ├── reelBox      y = CTRL_ABOVE = 21   (animated by ReelAnimator)
-//   │           ├── nudgeDown    y = 21 + 160 + 3 = 184
-//   │           └── lockBtn      y = 205
-//   ├── runPanel           y = PANEL_TOP = 277  (run states)
-//   └── betPanelContainer  y = PANEL_TOP = 277  (betting only)
-//
-//   cardsBlock  y = CARDS_TOP = 381  (= PANEL_TOP + RunPanel.PANEL_H + BLOCK_GAP)
-//
-// cardsBlock.y is a compile-time constant — overlap is impossible.
 // ─────────────────────────────────────────────────────────────────────────────
 const UI_W        = 700;
 const PAD_TOP     = 16;
-const REEL_SLOT_Y = 42;  // reelsContainer.y in topBlock (4 px below title bottom at 38)
+const REEL_SLOT_Y = 42;
 const PANEL_GAP   = 14;
 const BLOCK_GAP   = 16;
-const PANEL_TOP   = REEL_SLOT_Y + REEL_SLOT_H + PANEL_GAP; // 42 + 221 + 14 = 277
+const PANEL_TOP   = REEL_SLOT_Y + REEL_SLOT_H + PANEL_GAP;
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TEXT STYLES
 // ─────────────────────────────────────────────────────────────────────────────
-const END_TITLE_STYLE  = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 20, fill: 0xff4444, fontWeight: "bold" });
-const END_STAT_STYLE   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 14, fill: 0xffffff });
-const END_PROFIT_POS   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 16, fill: 0x44ff88, fontWeight: "bold" });
-const END_PROFIT_NEG   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 16, fill: 0xff4444, fontWeight: "bold" });
-const END_BTN_STYLE    = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 14, fill: 0xffffff, fontWeight: "bold" });
-
-// Lock button text styles (pre-allocated, reused in updateLockOverlay)
 const LOCK_BTN_OFF_STYLE  = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 10, fill: 0x6666aa });
 const LOCK_BTN_ON_STYLE   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 10, fill: 0xffaa00, fontWeight: "bold" });
 const NEAR_MISS_LBL_STYLE = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 10, fill: 0xff8800, fontWeight: "bold" });
 
 // ─────────────────────────────────────────────────────────────────────────────
+// PROGRESSION STATE
+// ─────────────────────────────────────────────────────────────────────────────
+const PROGRESSION_KEY = "puzzle_progression";
+
+interface Progression {
+  lives:             number;
+  /** Compound level keys that are unlocked, e.g. ["cards-1", "cards-2"]. */
+  unlockedLevelIds:  string[];
+}
+
+const MAX_LIVES          = 3;
+const INITIAL_UNLOCKED   = ["cards-1"];
+
+function loadProgression(): Progression {
+  try {
+    const raw = localStorage.getItem(PROGRESSION_KEY);
+    if (raw) {
+      const p = JSON.parse(raw) as Progression;
+      if (
+        typeof p.lives === "number" &&
+        Array.isArray(p.unlockedLevelIds) &&
+        p.unlockedLevelIds.every((v) => typeof v === "string")
+      ) return p;
+    }
+  } catch { /* ignore */ }
+  return { lives: MAX_LIVES, unlockedLevelIds: [...INITIAL_UNLOCKED] };
+}
+
+function saveProgression(p: Progression): void {
+  try { localStorage.setItem(PROGRESSION_KEY, JSON.stringify(p)); }
+  catch { /* ignore */ }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // REEL VIEW
-//
-//   slot        — outer wrapper added to reelsContainer; holds nudge+lock btns
-//   container   — reel box at y=CTRL_ABOVE in slot; THIS is what ReelAnimator
-//                 touches (text positions, clip mask). Never move it externally.
-//   nudgeUp/Down — triangle buttons outside the reel box
-//   lockBtn     — small bar below nudgeDown
-//   centerHit   — invisible hit-zone inside container for lock-toggle on click
 // ─────────────────────────────────────────────────────────────────────────────
 interface ReelView extends ReelViewRef {
   slot:           Container;
@@ -109,20 +119,16 @@ interface ReelView extends ReelViewRef {
   lockBtnBg:      Graphics;
   lockBtnLabel:   Text;
   centerHit:      Container;
-  /** Amber glow ring shown during near-miss animation (alpha starts at 0). */
   nearMissGlow:   Graphics;
-  /** "NEED X" / "ALMOST" label shown during near-miss animation (alpha=0). */
   nearMissLabel:  Text;
 }
 
 function createReelView(): ReelView {
-  const CX = REEL_WIDTH / 2; // 36
-  const HW = 14;              // triangle half-width
+  const CX = REEL_WIDTH / 2;
+  const HW = 14;
 
-  // ── Slot (outer wrapper) ────────────────────────────────────────────────────
   const slot = new Container();
 
-  // ── Nudge UP triangle (above reel, y=0 in slot) ─────────────────────────────
   const nudgeUp = new Container();
   nudgeUp.y         = 0;
   nudgeUp.eventMode = "static";
@@ -136,9 +142,8 @@ function createReelView(): ReelView {
   nudgeUp.on("pointerout",  () => { nudgeUpGfx.tint = 0xffffff; });
   slot.addChild(nudgeUp);
 
-  // ── Reel box (animated by ReelAnimator, y=CTRL_ABOVE in slot) ───────────────
   const container = new Container();
-  container.y = CTRL_ABOVE; // 21
+  container.y = CTRL_ABOVE;
 
   const bg = new Graphics();
   bg.roundRect(0, 0, REEL_WIDTH, REEL_HEIGHT, 6);
@@ -147,13 +152,12 @@ function createReelView(): ReelView {
   bg.eventMode = "none";
   container.addChild(bg);
 
-  // symbolsLayer: blur filter is applied here during spin; UI overlays stay outside.
   const symbolsLayer = new Container();
   container.addChild(symbolsLayer);
 
   const aboveSprite = new Sprite(Texture.WHITE);
   aboveSprite.anchor.set(0.5);
-  aboveSprite.x = CX; aboveSprite.y = -16; // Y_CENTER - SLOT_H; top 1/3 peeks below mask top
+  aboveSprite.x = CX; aboveSprite.y = -16;
   aboveSprite.width = SYMBOL_W; aboveSprite.height = SYMBOL_H;
   aboveSprite.alpha = 0.4;
   symbolsLayer.addChild(aboveSprite);
@@ -166,12 +170,11 @@ function createReelView(): ReelView {
 
   const belowSprite = new Sprite(Texture.WHITE);
   belowSprite.anchor.set(0.5);
-  belowSprite.x = CX; belowSprite.y = 176; // Y_CENTER + SLOT_H; bottom 1/3 peeks above mask bottom
+  belowSprite.x = CX; belowSprite.y = 176;
   belowSprite.width = SYMBOL_W; belowSprite.height = SYMBOL_H;
   belowSprite.alpha = 0.4;
   symbolsLayer.addChild(belowSprite);
 
-  // Permanent clip mask — top/bottom cards visible only in the 1/3 that falls within the window.
   const reelMask = new Graphics();
   reelMask.rect(0, 0, REEL_WIDTH, REEL_HEIGHT);
   reelMask.fill({ color: 0xffffff });
@@ -186,17 +189,15 @@ function createReelView(): ReelView {
   lockOverlay.eventMode = "none";
   container.addChild(lockOverlay);
 
-  // centerHit: invisible hit zone over center digit for lock-toggle click
   const centerHit  = new Container();
-  centerHit.eventMode = "none"; // enabled by syncReelControls when idle
+  centerHit.eventMode = "none";
   centerHit.cursor    = "pointer";
   centerHit.hitArea   = new Rectangle(0, REEL_HEIGHT / 2 - 32, REEL_WIDTH, 64);
   container.addChild(centerHit);
 
   slot.addChild(container);
 
-  // ── Nudge DOWN triangle (below reel box) ────────────────────────────────────
-  const nudgeDwnY  = CTRL_ABOVE + REEL_HEIGHT + NUDGE_GAP; // 184
+  const nudgeDwnY  = CTRL_ABOVE + REEL_HEIGHT + NUDGE_GAP;
   const nudgeDown  = new Container();
   nudgeDown.y         = nudgeDwnY;
   nudgeDown.eventMode = "static";
@@ -210,8 +211,7 @@ function createReelView(): ReelView {
   nudgeDown.on("pointerout",  () => { nudgeDwnGfx.tint = 0xffffff; });
   slot.addChild(nudgeDown);
 
-  // ── Lock button (below nudgeDown) ───────────────────────────────────────────
-  const lockBtnY = nudgeDwnY + NUDGE_H + 3; // 205
+  const lockBtnY = nudgeDwnY + NUDGE_H + 3;
   const lockBtn  = new Container();
   lockBtn.y         = lockBtnY;
   lockBtn.eventMode = "static";
@@ -234,10 +234,7 @@ function createReelView(): ReelView {
   lockBtn.on("pointerout",  () => { lockBtnBg.tint = 0xffffff; });
   slot.addChild(lockBtn);
 
-  // ── Near-miss overlay (amber glow ring + label) ─────────────────────────────
-  // Both are non-interactive and start invisible; animated by showNearMiss().
   const nearMissGlow = new Graphics();
-  // A ring slightly outside the reel box edges for a "halo" effect.
   nearMissGlow.roundRect(-3, -3, REEL_WIDTH + 6, REEL_HEIGHT + 6, 8);
   nearMissGlow.stroke({ color: 0xff8800, width: 4 });
   nearMissGlow.roundRect(0, 0, REEL_WIDTH, REEL_HEIGHT, 6);
@@ -249,7 +246,7 @@ function createReelView(): ReelView {
   const nearMissLabel = new Text({ text: "", style: NEAR_MISS_LBL_STYLE });
   nearMissLabel.anchor.set(0.5, 0);
   nearMissLabel.x        = CX;
-  nearMissLabel.y        = 6;  // inside reel box, above the "above" digit
+  nearMissLabel.y        = 6;
   nearMissLabel.alpha    = 0;
   nearMissLabel.eventMode = "none";
   container.addChild(nearMissLabel);
@@ -266,9 +263,6 @@ function createReelView(): ReelView {
 }
 
 function updateReelView(view: ReelView, digits: VisibleDigits): void {
-  // Reversed layout — matches downward animation direction:
-  //   aboveSprite shows tape[offset+1] (next symbol entering from top)
-  //   belowSprite shows tape[offset-1] (symbol that just passed center)
   view.aboveSprite.texture  = getSymbolTexture(digits.below);
   view.centerSprite.texture = getSymbolTexture(digits.center);
   view.belowSprite.texture  = getSymbolTexture(digits.above);
@@ -276,7 +270,6 @@ function updateReelView(view: ReelView, digits: VisibleDigits): void {
 
 function updateLockOverlay(view: ReelView, locked: boolean): void {
   view.lockOverlay.visible = locked;
-  // Update lock button appearance
   view.lockBtnBg.clear();
   view.lockBtnBg.roundRect(0, 0, REEL_WIDTH, LOCK_H, 3);
   if (locked) {
@@ -292,7 +285,6 @@ function updateLockOverlay(view: ReelView, locked: boolean): void {
   }
 }
 
-// Disable/enable a control button with alpha + eventMode.
 function setCtrlDisabled(c: Container, disabled: boolean): void {
   c.alpha     = disabled ? 0.30 : 1.0;
   c.eventMode = disabled ? "none" : "static";
@@ -312,7 +304,7 @@ async function main() {
   document.body.appendChild(app.canvas);
 
   // ── Loading screen ─────────────────────────────────────────────────────────
-  const MIN_DURATION = 1500; // ms
+  const MIN_DURATION = 1500;
   const startTs      = performance.now();
 
   const loading = new LoadingScreen(logoUrl());
@@ -322,15 +314,11 @@ async function main() {
   const resizeLoading = () => loading.layout(app.screen.width, app.screen.height);
   window.addEventListener("resize", resizeLoading);
 
-  // Ticker drives all loader animations (bar lerp, glow pulse).
   const loaderTick = () => loading.tick(app.ticker.deltaMS);
   app.ticker.add(loaderTick);
 
-  // Real asset loading — reports progress 0..1 if there are actual assets.
-  // When there are none, the fake-cap easing drives the bar.
   const assetsPromise = loadAssets((p) => loading.setRealProgress(p));
 
-  // Wait for BOTH: assets loaded AND minimum display duration elapsed.
   await new Promise<void>((r) => {
     assetsPromise.then(() => {
       const remaining = Math.max(0, MIN_DURATION - (performance.now() - startTs));
@@ -338,16 +326,13 @@ async function main() {
     });
   });
 
-  // Signal loader: bar now animates smoothly to 100%.
   loading.complete();
 
-  // Wait until the bar visually reaches 100% (the lerp finishes).
   await new Promise<void>((r) => {
     const poll = () => loading.isDisplayDone ? r() : requestAnimationFrame(poll);
     requestAnimationFrame(poll);
   });
 
-  // Tear down loader.
   app.ticker.remove(loaderTick);
   window.removeEventListener("resize", resizeLoading);
   app.stage.removeChild(loading);
@@ -372,23 +357,38 @@ async function main() {
   // ── End rules screen ───────────────────────────────────────────────────────
 
   const fsm     = new GameStateMachine();
-  const model   = new TapeSlotModel(42);
+  // Model is seeded with DEFAULT_LEVEL_CONFIG's reel count so the initial view
+  // matches.  When a level with a different count starts in the future the
+  // model can be rebuilt via rebuildFromSeed() with the new reelCount.
+  const model   = new TapeSlotModel(42, undefined, DEFAULT_LEVEL_CONFIG.reelCount);
   const run     = new RunController();
   const cards   = new CardController();
   const economy = new EconomyController();
 
+  // ── Progression ─────────────────────────────────────────────────────────────
+  const progression: Progression = loadProgression();
+  /** Active level config — updated at the start of each level. */
+  let activeLevelConfig = DEFAULT_LEVEL_CONFIG;
+  /** Kingdom of the level currently being played. */
+  let currentKingdomId   = DEFAULT_LEVEL_CONFIG.kingdomId;
+  /** 1-based level number within the current kingdom. */
+  let currentLevelNumber = DEFAULT_LEVEL_CONFIG.levelNumber;
+
+  /**
+   * Resolved by the FSM "ended" listener with true (all cards claimed) or
+   * false (run ended early).  Set at the start of each level and cleared on
+   * resolution so it doesn't fire twice.
+   */
+  let levelEndResolve: ((allClaimed: boolean) => void) | null = null;
+
   // ══════════════════════════════════════════════════════════════════════════
   // GAME ROOT
-  //
-  // Z-ORDER within gameRoot:
-  //   index 0 — cardsBlock  (behind — never intercepts topBlock events)
-  //   index 1 — topBlock    (in front — hit-tested first by Pixi)
   // ══════════════════════════════════════════════════════════════════════════
   const gameRoot = new Container();
   app.stage.addChild(gameRoot);
 
   // ── cardsBlock — index 0 (behind) ─────────────────────────────────────────
-  const CARDS_TOP = PANEL_TOP + RunPanel.PANEL_H + BLOCK_GAP; // 277 + 88 + 16 = 381
+  const CARDS_TOP = PANEL_TOP + RunPanel.PANEL_H + BLOCK_GAP;
 
   const cardsBlock = new Container();
   cardsBlock.y         = CARDS_TOP;
@@ -408,31 +408,37 @@ async function main() {
   const topBlock = new Container();
   gameRoot.addChild(topBlock);
 
-  // Title — bottom-anchored, sits 4 px above the first nudge button row
-  const title = new Text({
-    text: "PUZZLE SLOT",
-    style: new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 28, fill: 0xffcc00, fontWeight: "bold", letterSpacing: 4 }),
+  // ── Level label (left) + Lives display (right) in header area ─────────────
+  const levelLabel = new Text({
+    text: "Level 1",
+    style: new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 18, fill: 0xffcc00, fontWeight: "bold" }),
   });
-  title.anchor.set(0.5, 1);
-  title.x = Math.round(UI_W / 2);
-  title.y = REEL_SLOT_Y - 4; // 38  — bottom of text, 4 px gap to slot top
-  topBlock.addChild(title);
+  levelLabel.anchor.set(0, 1);
+  levelLabel.x = 0;
+  levelLabel.y = REEL_SLOT_Y - 4;
+  topBlock.addChild(levelLabel);
 
-  // Reels container — holds one slot per reel
+  const livesDisplay = new LivesDisplay(MAX_LIVES);
+  // x is set in layout() after width is known; y aligns bottom to the header line
+  livesDisplay.y = REEL_SLOT_Y - 4 - 4;
+  topBlock.addChild(livesDisplay);
+
+  // Reels container
   const reelsContainer = new Container();
   reelsContainer.x = Math.round((UI_W - REEL_AREA_WIDTH) / 2);
-  reelsContainer.y = REEL_SLOT_Y; // 42
+  reelsContainer.y = REEL_SLOT_Y;
   topBlock.addChild(reelsContainer);
 
+  // Build MAX_REEL_COUNT view slots so that any future level (with more reels)
+  // can start without rebuilding the Pixi hierarchy.  Slots beyond the active
+  // level's reelCount are hidden by syncReelVisibility().
   const reelViews: ReelView[] = [];
-  for (let i = 0; i < REEL_COUNT; i++) {
+  for (let i = 0; i < MAX_REEL_COUNT; i++) {
     const rv  = createReelView();
     rv.slot.x = i * (REEL_WIDTH + REEL_GAP);
-    reelsContainer.addChild(rv.slot); // add the SLOT, not the inner container
+    reelsContainer.addChild(rv.slot);
     reelViews.push(rv);
 
-    // Capture index for event closures (function declarations are hoisted,
-    // so doNudge / doToggleLock are accessible here even though declared later).
     const idx = i;
     rv.nudgeUp.on("pointerdown",   (e: FederatedPointerEvent) => { e.stopPropagation(); doNudge(idx, -1); });
     rv.nudgeDown.on("pointerdown", (e: FederatedPointerEvent) => { e.stopPropagation(); doNudge(idx, +1); });
@@ -440,17 +446,24 @@ async function main() {
     rv.centerHit.on("pointerdown", (e: FederatedPointerEvent) => { e.stopPropagation(); doToggleLock(idx); });
   }
 
+  /**
+   * Show only the reel slots used by the active level config; hide the rest.
+   * Call whenever activeLevelConfig changes.
+   */
+  function syncReelVisibility(): void {
+    for (let i = 0; i < reelViews.length; i++) {
+      reelViews[i].slot.visible = i < activeLevelConfig.reelCount;
+    }
+    // Re-centre the reel container for the active reel count.
+    const activeAreaW = activeLevelConfig.reelCount * REEL_WIDTH + (activeLevelConfig.reelCount - 1) * REEL_GAP;
+    reelsContainer.x  = Math.round((UI_W - activeAreaW) / 2);
+  }
+
   // ── Near-miss reel animation ───────────────────────────────────────────────
   let _nmCancelFn: (() => void) | null = null;
 
-  function showNearMiss(
-    reelIndices: number[],
-    wanted?: string,
-    durationMs = 1400,
-  ): void {
-    // Cancel any running animation first.
+  function showNearMiss(reelIndices: number[], wanted?: string, durationMs = 1400): void {
     if (_nmCancelFn) { _nmCancelFn(); _nmCancelFn = null; }
-    // Reset all reels to invisible.
     for (const rv of reelViews) {
       rv.nearMissGlow.alpha  = 0;
       rv.nearMissLabel.alpha = 0;
@@ -465,9 +478,9 @@ async function main() {
       if (rv) rv.nearMissLabel.text = label;
     }
 
-    const startTs = performance.now();
+    const startNM = performance.now();
     const tick = (): void => {
-      const elapsed = performance.now() - startTs;
+      const elapsed = performance.now() - startNM;
       const hold    = Math.max(0, durationMs - FADE_IN - FADE_OUT);
       let   alpha: number;
 
@@ -478,7 +491,6 @@ async function main() {
       } else if (elapsed < durationMs) {
         alpha = 1 - (elapsed - FADE_IN - hold) / FADE_OUT;
       } else {
-        // Animation complete — clean up.
         for (const idx of reelIndices) {
           const rv = reelViews[idx];
           if (rv) { rv.nearMissGlow.alpha = 0; rv.nearMissLabel.alpha = 0; }
@@ -504,32 +516,19 @@ async function main() {
     app.ticker.add(tick);
   }
 
-  // ── RunPanel + BetPanel ────────────────────────────────────────────────────
+  // ── RunPanel ────────────────────────────────────────────────────────────────
   const animator       = new ReelAnimator(reelViews, model, app.ticker, getSymbolTexture);
   const spinController = new SpinController(model, fsm, run, animator);
 
-  /**
-   * True when the last spin drained actions to 0 but left claimable cards.
-   * The run must NOT end until the player claims one card (or the card is
-   * a tier-2+ card that restores an action, in which case the run continues).
-   */
-  let endAfterClaim = false;
-
-  /**
-   * True immediately after a card is claimed, until the next SPIN starts.
-   * While true: SPIN is allowed, NUDGE and LOCK are blocked (with toast).
-   */
+  let endAfterClaim         = false;
   let postClaimSpinRequired = false;
 
   function doSpin(): void {
     if (fsm.state !== "idle") return;
     if (!run.canSpend(1)) return;
 
-    // Lift the post-claim gate the moment a spin is committed.
     postClaimSpinRequired = false;
 
-    // Clear all highlights immediately when spin starts.
-    // clearAvailable() wipes available + both almost sets in one call.
     const hadAvailable = cards.hasAvailable();
     const hadAlmost    = cards.almostShownIds.size > 0;
     if (hadAvailable || hadAlmost) {
@@ -539,7 +538,6 @@ async function main() {
     }
 
     spinController.requestSpin(() => {
-      // onSpinResolved evaluates ready cards AND recomputes almostShownIds.
       const digits = model.getVisibleCenterDigits();
       cards.onSpinResolved(digits);
 
@@ -549,10 +547,8 @@ async function main() {
 
       if (run.actions === 0) {
         if (!cards.hasAvailable()) {
-          // No actions, no claimable cards — end immediately.
           fsm.transition("ended");
         } else {
-          // No actions, but there are claimable cards — let player claim first.
           endAfterClaim = true;
           toast.show("LAST CLAIM!", { duration: 60_000 });
         }
@@ -561,7 +557,6 @@ async function main() {
       } else if (cards.almostShownIds.size > 0) {
         toast.show("SO CLOSE...", { duration: 60_000 });
 
-        // Near-miss reel highlight — pick the best almost card and get a hint.
         const almostCards = CARDS.filter(c => cards.almostShownIds.has(c.id));
         almostCards.sort((a, b) =>
           b.payoutMult - a.payoutMult || b.tier - a.tier || a.id.localeCompare(b.id),
@@ -575,23 +570,14 @@ async function main() {
     });
   }
 
-  const runPanel = new RunPanel(run, economy, doSpin);
+  const runPanel = new RunPanel(run, doSpin);
   runPanel.y = PANEL_TOP;
   topBlock.addChild(runPanel);
 
-  const betPanelContainer = new Container();
-  betPanelContainer.y = PANEL_TOP;
-  topBlock.addChild(betPanelContainer);
-
-  const betPanel = new BetPanel(economy, run, () => handleStartRun());
-  betPanelContainer.addChild(betPanel);
-
-  // ── Toast — non-interactive message layer above the cards grid ────────────
-  // Z-index 2 (after cardsBlock=0, topBlock=1): renders on top but never
-  // intercepts clicks because container.eventMode = "none".
+  // ── Toast ─────────────────────────────────────────────────────────────────
   const toast = new ToastMessage(app.ticker);
-  toast.container.x = Math.round(UI_W / 2); // horizontally centred over the grid
-  toast.container.y = CARDS_TOP - 20;        // just above the cards grid
+  toast.container.x = Math.round(UI_W / 2);
+  toast.container.y = CARDS_TOP - 20;
   gameRoot.addChild(toast.container);
 
   // ── DevDrawer ─────────────────────────────────────────────────────────────
@@ -602,36 +588,24 @@ async function main() {
     () => {
       spinController.reset();
       devDrawer.devPanel.clearLastSpin();
-      for (let i = 0; i < REEL_COUNT; i++) updateLockOverlay(reelViews[i], false);
+      for (let i = 0; i < reelViews.length; i++) updateLockOverlay(reelViews[i], false);
     },
     doSpin,
   );
-  // Reel selector + per-reel nudge buttons in DevPanel are superseded by the
-  // on-reel triangle controls; hide them to avoid duplicates.
   devDrawer.devPanel.hideNudgeSection();
-
-  // ── End overlay ─────────────────────────────────────────────────────────────
-  const endOverlayData = buildEndOverlay();
-  const endOverlay     = endOverlayData.container;
-  endOverlay.visible   = false;
-  app.stage.addChild(endOverlay);
 
   app.stage.addChild(devDrawer.container); // topmost — handle always hittable
 
   // ── Visibility ──────────────────────────────────────────────────────────────
   function applyVisibility(state: GameState): void {
-    const betting = state === "betting";
-    const inRun   = !betting;
+    const inRun = state !== "betting";
 
-    title.visible             = inRun;
-    runPanel.visible          = inRun;
-    betPanelContainer.visible = betting;
+    levelLabel.visible    = inRun;
+    livesDisplay.visible  = inRun;
+    runPanel.visible      = inRun;
+    cardsBlock.visible    = inRun;
 
-    cardsBlock.visible        = inRun;
-    if (betting) toast.container.visible = false; // cancel any mid-animation toast
-    endOverlay.visible = state === "ended";
-
-    if (state === "ended") refreshEndOverlay();
+    if (!inRun) toast.container.visible = false;
   }
 
   // ── Per-reel action handlers ────────────────────────────────────────────────
@@ -648,7 +622,7 @@ async function main() {
     run.recordNudge();
     model.reels[reelIdx].nudge(direction);
     refreshAllReels();
-    refreshCardsFromCurrentDigits(); // re-evaluate READY/ALMOST with new digits
+    refreshCardsFromCurrentDigits();
     devDrawer.devPanel.refreshInfo();
     if (run.actions === 0) fsm.transition("ended");
   }
@@ -661,7 +635,6 @@ async function main() {
     }
     const alreadyLocked = model.isLocked(reelIdx);
     if (!alreadyLocked) {
-      // Locking costs 1 action; enforce max-2-holds limit.
       if (model.lockedCount() >= 2) {
         toast.show("Max 2 holds", { duration: 1500 });
         return;
@@ -672,28 +645,19 @@ async function main() {
     model.toggleLocked(reelIdx);
     updateLockOverlay(reelViews[reelIdx], model.isLocked(reelIdx));
     devDrawer.devPanel.refreshInfo();
-    refreshAllCards(); // keep card visuals in sync with current state
+    refreshAllCards();
     syncReelControls(fsm.state);
   }
 
-  /**
-   * Enable or disable per-reel nudge/lock controls based on game state.
-   * Called whenever state transitions or actions count changes.
-   *
-   * Rules:
-   *   nudge: only in "idle" AND actions >= nudge cost
-   *   lock:  only in "idle"
-   */
   function syncReelControls(state: GameState): void {
     const nudgeCost = run.getNudgeCost();
     const canNudge  = state === "idle" && run.canSpend(nudgeCost) && !postClaimSpinRequired;
     const lockBase  = state === "idle" && !postClaimSpinRequired;
 
     for (let i = 0; i < reelViews.length; i++) {
-      const rv        = reelViews[i];
-      const isLocked  = model.isLocked(i);
-      // Can lock: not already at limit (unless this reel is already locked = can unlock)
-      const canLock   = lockBase && (isLocked || (run.canSpend(run.getLockCost()) && model.lockedCount() < 2));
+      const rv       = reelViews[i];
+      const isLocked = model.isLocked(i);
+      const canLock  = lockBase && (isLocked || (run.canSpend(run.getLockCost()) && model.lockedCount() < 2));
       setCtrlDisabled(rv.nudgeUp,   !canNudge);
       setCtrlDisabled(rv.nudgeDown, !canNudge);
       setCtrlDisabled(rv.lockBtn,   !canLock);
@@ -711,59 +675,39 @@ async function main() {
     run.configure(economy.anteEnabled);
     run.resetRun();
     economy.resetRun();
-    cards.resetRun(); // also clears almostShownIds
+    cards.resetRun();
     model.resetOffsets();
     model.resetLocks();
     spinController.reset();
     devDrawer.devPanel.clearLastSpin();
-    for (let i = 0; i < REEL_COUNT; i++) updateLockOverlay(reelViews[i], false);
+    for (let i = 0; i < reelViews.length; i++) updateLockOverlay(reelViews[i], false);
 
     fsm.transition("idle");
 
     refreshAllReels();
     devDrawer.devPanel.refreshInfo();
-    // Auto-spin at run start — first spin happens immediately.
     doSpin();
-  }
-
-  function handleReturnToBetting(): void {
-    if (fsm.state !== "ended") return;
-    fsm.transition("betting");
-    betPanel.refresh();
   }
 
   // ── Card helpers ────────────────────────────────────────────────────────────
 
-  /** Centralised card-grid refresh. Passes current available/claimed/almost sets. */
   function refreshAllCards(): void {
     cardGrid.updateCards(cards.availableIds, cards.claimedIds, cards.almostShownIds);
-    cardGrid.updateSummary(economy.totalWin, cards.claimedIds.size, economy.baseBet);
-    runPanel.refresh(economy.totalWin, cards.claimedIds.size);
+    cardGrid.updateSummary(cards.claimedIds.size);
+    runPanel.refresh(cards.claimedIds.size);
   }
 
-  /**
-   * Re-evaluate card READY/ALMOST states from the current visible digits and
-   * repaint the card grid.  Call this whenever digits change outside a full spin
-   * (nudge, offset reset, etc.).  Does NOT touch RNG or spin state.
-   */
   function refreshCardsFromCurrentDigits(): void {
     const digits = model.getVisibleCenterDigits();
     cards.onDigitsChanged(digits);
     refreshAllCards();
   }
 
-  /**
-   * Card click handler — claim-only path.
-   *
-   * Only AVAILABLE (green) cards are actionable; CardGrid already blocks clicks
-   * on non-available cards, but we double-check here for safety.
-   */
   function handleCardClick(cardId: string): void {
     const s = fsm.state;
     if (s === "running" || s === "resolve" || s === "betting") return;
     if (!cards.canClaim(cardId)) return;
 
-    // Stop any near-miss glow immediately — the spin state has changed.
     if (_nmCancelFn) { _nmCancelFn(); _nmCancelFn = null; }
 
     const { payoutMult, tier } = cards.claimOne(cardId);
@@ -774,39 +718,29 @@ async function main() {
       if (s === "ended" && run.actions > 0) fsm.transition("idle");
     }
 
-    // Update all cards (claimed card will be dim; all others lose "available").
     refreshAllCards();
-    // Brief green flash on the just-claimed card.
     cardGrid.flashClaimAnimation(cardId);
 
-    // Clear all reel locks so the next spin starts fresh.
     model.resetLocks();
-    for (let i = 0; i < REEL_COUNT; i++) updateLockOverlay(reelViews[i], false);
+    for (let i = 0; i < reelViews.length; i++) updateLockOverlay(reelViews[i], false);
 
-    // Block nudge/lock until the player spins again.
     postClaimSpinRequired = true;
-    syncReelControls(fsm.state); // dim controls immediately
+    syncReelControls(fsm.state);
 
-    // If this was the final claim (last spin had drained actions to 0):
     if (endAfterClaim) {
       endAfterClaim = false;
       if (run.actions === 0) {
-        // No bonus actions from this card — end the run now.
         devDrawer.devPanel.refreshInfo();
         syncReelControls(fsm.state);
         fsm.transition("ended");
         return;
       }
-      // tier-2+ card restored an action — run continues with the normal flow below.
     }
 
-    // almostShownIds is already cleared by claimOne(); check before refresh.
     toast.show("LOCKS CLEARED  •  SPIN TO CONTINUE", { duration: 1200 });
 
     devDrawer.devPanel.refreshInfo();
     syncReelControls(fsm.state);
-
-    if (fsm.state === "ended") refreshEndOverlay();
   }
 
   // ── FSM listener ─────────────────────────────────────────────────────────────
@@ -821,117 +755,129 @@ async function main() {
     devDrawer.setSpinLocked(animating);
 
     applyVisibility(next);
+
+    // Level end detection — resolve the promise waited on by runGameLoop.
+    if (next === "ended" && levelEndResolve) {
+      const allClaimed = cards.claimedIds.size === CARDS.length;
+      const resolve    = levelEndResolve;
+      levelEndResolve  = null;
+      // Slight delay so the FSM state fully settles before the game loop acts.
+      setTimeout(() => resolve(allClaimed), 80);
+    }
   });
 
   // ── Refresh helpers ──────────────────────────────────────────────────────────
   function refreshAllReels(): void {
-    for (let i = 0; i < REEL_COUNT; i++) {
+    // Only refresh slots used by the active level; extras are hidden.
+    for (let i = 0; i < activeLevelConfig.reelCount; i++) {
       updateReelView(reelViews[i], model.reels[i].getVisible());
       updateLockOverlay(reelViews[i], model.isLocked(i));
     }
-    // Card availability is computed in doSpin's onSpinResolved callback — not here.
     refreshAllCards();
-    syncReelControls(fsm.state); // keeps nudge enable in sync with actions count
+    syncReelControls(fsm.state);
   }
 
-  // ── End overlay (function declaration — hoisted, called above) ──────────────
-  interface EndOverlay {
-    container:  Container;
-    winText:    Text;
-    betText:    Text;
-    profitText: Text;
-  }
+  // ── Result popup ─────────────────────────────────────────────────────────────
+  /**
+   * Shows a centred modal with `message`, waits for the player to click
+   * "Continue", then destroys itself and resolves.
+   */
+  function showResultPopup(message: string, isSuccess: boolean): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const OW = 360, OH = 170;
 
-  function buildEndOverlay(): EndOverlay {
-    const c = new Container();
-    const OW = 340, OH = 180;
+      const popup = new Container();
 
-    const bg = new Graphics();
-    bg.roundRect(0, 0, OW, OH, 10);
-    bg.fill({ color: 0x0a0a20, alpha: 0.95 });
-    bg.stroke({ color: 0xff4444, width: 2 });
-    bg.eventMode = "none";
-    c.addChild(bg);
+      const popBg = new Graphics();
+      popBg.roundRect(0, 0, OW, OH, 10);
+      popBg.fill({ color: 0x0a0a20, alpha: 0.97 });
+      popBg.stroke({ color: isSuccess ? 0x44cc44 : 0xff4444, width: 2 });
+      popBg.eventMode = "none";
+      popup.addChild(popBg);
 
-    const t = new Text({ text: "RUN FINISHED", style: END_TITLE_STYLE });
-    t.anchor.set(0.5, 0); t.x = OW / 2; t.y = 14;
-    c.addChild(t);
+      const msgText = new Text({
+        text: message,
+        style: new TextStyle({
+          fontFamily: "Arial, sans-serif",
+          fontSize:   20,
+          fill:       isSuccess ? 0x44ff88 : 0xff6666,
+          fontWeight: "bold",
+          align:      "center",
+          wordWrap:   true,
+          wordWrapWidth: OW - 40,
+        }),
+      });
+      msgText.anchor.set(0.5, 0.5);
+      msgText.x = OW / 2;
+      msgText.y = OH / 2 - 22;
+      popup.addChild(msgText);
 
-    const winText = new Text({ text: "", style: END_STAT_STYLE });
-    winText.anchor.set(0.5, 0); winText.x = OW / 2; winText.y = 50;
-    c.addChild(winText);
+      const btnW = 200, btnH = 36;
+      const btn  = new Container();
+      btn.eventMode = "static";
+      btn.cursor    = "pointer";
 
-    const betText = new Text({ text: "", style: END_STAT_STYLE });
-    betText.anchor.set(0.5, 0); betText.x = OW / 2; betText.y = 72;
-    c.addChild(betText);
+      const bBg = new Graphics();
+      bBg.roundRect(0, 0, btnW, btnH, 6);
+      bBg.fill({ color: 0x333366 });
+      bBg.stroke({ color: 0x6666cc, width: 2 });
+      btn.addChild(bBg);
 
-    const profitText = new Text({ text: "", style: END_PROFIT_POS });
-    profitText.anchor.set(0.5, 0); profitText.x = OW / 2; profitText.y = 98;
-    c.addChild(profitText);
+      const bTxt = new Text({
+        text: "Continue",
+        style: new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 14, fill: 0xffffff, fontWeight: "bold" }),
+      });
+      bTxt.anchor.set(0.5, 0.5);
+      bTxt.x = btnW / 2;
+      bTxt.y = btnH / 2;
+      btn.addChild(bTxt);
 
-    const btnW = 220, btnH = 32;
-    const btn  = new Container();
-    btn.eventMode = "static"; btn.cursor = "pointer";
-    const bBg = new Graphics();
-    bBg.roundRect(0, 0, btnW, btnH, 5);
-    bBg.fill({ color: 0x333366 }); bBg.stroke({ color: 0x6666cc, width: 2 });
-    btn.addChild(bBg);
-    const bTxt = new Text({ text: "RETURN TO BETTING", style: END_BTN_STYLE });
-    bTxt.x = Math.round((btnW - bTxt.width) / 2);
-    bTxt.y = Math.round((btnH - bTxt.height) / 2);
-    btn.addChild(bTxt);
-    btn.on("pointerdown", (e: FederatedPointerEvent) => { e.stopPropagation(); handleReturnToBetting(); });
-    btn.on("pointerover", () => { bBg.tint = 0xaaaaff; });
-    btn.on("pointerout",  () => { bBg.tint = 0xffffff; });
-    btn.x = Math.round((OW - btnW) / 2);
-    btn.y = OH - btnH - 12;
-    c.addChild(btn);
+      btn.x = Math.round((OW - btnW) / 2);
+      btn.y = OH - btnH - 18;
+      btn.on("pointerdown", (e: FederatedPointerEvent) => {
+        e.stopPropagation();
+        app.stage.removeChild(popup);
+        popup.destroy({ children: true });
+        resolve();
+      });
+      btn.on("pointerover", () => { bBg.tint = 0xaaaaff; });
+      btn.on("pointerout",  () => { bBg.tint = 0xffffff; });
+      popup.addChild(btn);
 
-    return { container: c, winText, betText, profitText };
-  }
+      // Position: scale-aware centring on screen
+      const w   = window.innerWidth;
+      const h   = window.innerHeight;
+      const cfg = computeLayout(w, h);
+      const s   = cfg.scale;
+      popup.scale.set(s);
+      popup.x = Math.round((w - OW * s) / 2);
+      popup.y = Math.round((h - OH * s) / 2);
 
-  function refreshEndOverlay(): void {
-    endOverlayData.winText.text = `Total Win: ${economy.totalWin.toFixed(2)} FUN`;
-    endOverlayData.betText.text = `Total Bet: ${economy.totalBet.toFixed(2)} FUN`;
-    const p = economy.profit;
-    endOverlayData.profitText.text  = `Profit: ${p >= 0 ? "+" : ""}${p.toFixed(2)} FUN`;
-    endOverlayData.profitText.style = p >= 0 ? END_PROFIT_POS : END_PROFIT_NEG;
+      app.stage.addChild(popup);
+    });
   }
 
   // ── Layout ──────────────────────────────────────────────────────────────────
   function layout(): void {
-    // Read window dimensions directly — PixiJS queues its internal renderer
-    // resize via requestAnimationFrame, so app.screen.width/height may still
-    // hold old values when the window "resize" event fires.
     const w = window.innerWidth;
     const h = window.innerHeight;
 
     const cfg = computeLayout(w, h);
 
-    // Scale the entire game world — all internal positions stay untouched.
     gameRoot.x = cfg.rootX;
     gameRoot.y = cfg.rootY;
     gameRoot.scale.set(cfg.scale);
 
-    // End overlay lives on app.stage (not inside gameRoot) so it needs its own
-    // screen-space position and scale to stay in sync with the scaled gameRoot.
-    const s  = cfg.scale;
-    const eoW = 340 * s;
-    const eoH = 180 * s;
-    endOverlay.scale.set(s);
-    endOverlay.x = Math.round((w - eoW) / 2);
-    // Vertically: same screen y as the top of the reel box inside gameRoot.
-    endOverlay.y = Math.round(cfg.rootY + (REEL_SLOT_Y + CTRL_ABOVE) * s);
-    void eoH; // referenced for documentation; PixiJS uses it via scale
-
     devDrawer.resize(w, h);
 
-    // "?" button: top-right corner of the canvas, above the DevDrawer handle.
+    // Lives display: right-align within header area
+    livesDisplay.x = UI_W - Math.round(livesDisplay.width);
+
     rulesBtn.x = w - RBTN_SIZE - 8;
     rulesBtn.y = 8;
   }
 
-  // ── "?" rules button (always visible, top-right corner) ─────────────────────
+  // ── "?" rules button ─────────────────────────────────────────────────────────
   const rulesBtn        = new Container();
   rulesBtn.eventMode    = "static";
   rulesBtn.cursor       = "pointer";
@@ -956,7 +902,6 @@ async function main() {
   rulesBtn.on("pointerout",  () => { rulesBtnBg.tint = 0xffffff; });
   rulesBtn.on("pointerdown", (e: FederatedPointerEvent) => {
     e.stopPropagation();
-    // Show rules as overlay; clicking PLAY / CLOSE removes it.
     const overlay = new RulesScreen();
     overlay.layout(app.screen.width, app.screen.height);
     app.stage.addChild(overlay);
@@ -968,7 +913,6 @@ async function main() {
       overlay.destroy({ children: true });
     };
   });
-  // Positioned in layout()
   app.stage.addChild(rulesBtn);
 
   // ── Boot ────────────────────────────────────────────────────────────────────
@@ -977,11 +921,99 @@ async function main() {
   devDrawer.devPanel.syncState(fsm.state);
   runPanel.syncState(fsm.state);
 
-  applyVisibility(fsm.state); // starts in "betting"
+  applyVisibility(fsm.state); // starts "betting" — game UI hidden
   syncReelControls(fsm.state);
+  syncReelVisibility();       // hide reel slots beyond the default level's count
 
   layout();
   window.addEventListener("resize", layout);
+
+  // ── Main game loop ──────────────────────────────────────────────────────────
+  // Runs forever: Level Select → play level → handle result → repeat.
+  void runGameLoop();
+
+  async function runGameLoop(): Promise<void> {
+    while (true) {
+      // ── Show Level Select ──────────────────────────────────────────────────
+      const unlockedSet = new Set(progression.unlockedLevelIds);
+      const levelSelect = new LevelSelectScreen(unlockedSet);
+      levelSelect.layout(app.screen.width, app.screen.height);
+      app.stage.addChild(levelSelect);
+
+      const onLSResize = () => levelSelect.layout(app.screen.width, app.screen.height);
+      window.addEventListener("resize", onLSResize);
+
+      const { kingdomId, levelNumber } = await new Promise<{ kingdomId: string; levelNumber: number }>(
+        (r) => { levelSelect.onLevelSelected = (k, l) => r({ kingdomId: k, levelNumber: l }); },
+      );
+
+      window.removeEventListener("resize", onLSResize);
+      app.stage.removeChild(levelSelect);
+      levelSelect.destroy({ children: true });
+
+      // ── Configure active level ─────────────────────────────────────────────
+      currentKingdomId   = kingdomId;
+      currentLevelNumber = levelNumber;
+      activeLevelConfig  = getLevelConfig(`${kingdomId}-${levelNumber}`);
+
+      levelLabel.text = `Level ${levelNumber}`;
+      livesDisplay.setLives(progression.lives);
+
+      // Apply reel visibility / layout for this level's reel count.
+      syncReelVisibility();
+
+      // Configure economy (internal only — not shown to player).
+      economy.setBaseBet(10);
+      economy.setAnteEnabled(false);
+
+      // Arm the level-end resolver before starting (FSM must be in "betting").
+      const allClaimed = await new Promise<boolean>((r) => {
+        levelEndResolve = r;
+        handleStartRun(); // transitions betting → idle, auto-spins
+      });
+
+      // ── Evaluate result ────────────────────────────────────────────────────
+      if (allClaimed) {
+        // Success: unlock next level in this kingdom (sequential).
+        const nextLevelNumber = currentLevelNumber + 1;
+        const nextKey         = `${currentKingdomId}-${nextLevelNumber}`;
+        const kingdomName     = KINGDOM_NAMES[currentKingdomId] ?? currentKingdomId;
+
+        let successMsg: string;
+        if (nextLevelNumber <= LEVELS_PER_KINGDOM) {
+          if (!progression.unlockedLevelIds.includes(nextKey)) {
+            progression.unlockedLevelIds = [...progression.unlockedLevelIds, nextKey];
+            saveProgression(progression);
+          }
+          successMsg = `Level ${nextLevelNumber} unlocked!`;
+        } else {
+          // All levels in this kingdom complete — no cross-kingdom unlock yet.
+          successMsg = `${kingdomName} complete!`;
+        }
+
+        await showResultPopup(successMsg, true);
+
+      } else {
+        // Failure: lose one life.
+        progression.lives = Math.max(0, progression.lives - 1);
+        saveProgression(progression);
+        livesDisplay.setLives(progression.lives);
+
+        if (progression.lives <= 0) {
+          await showResultPopup("No lives left", false);
+          progression.lives = MAX_LIVES;
+          saveProgression(progression);
+        } else {
+          await showResultPopup("Level failed", false);
+        }
+      }
+
+      // Return FSM to "betting" for the next loop iteration.
+      if (fsm.state === "ended") {
+        fsm.transition("betting");
+      }
+    }
+  }
 }
 
 main();

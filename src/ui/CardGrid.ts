@@ -42,9 +42,7 @@ type CardState = "normal" | "available" | "almost" | "claimed";
 
 // ── Text styles ───────────────────────────────────────────────────────────────
 const SUMMARY_STYLE     = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 13, fill: 0xcccccc });
-const SUMMARY_WIN_STYLE = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 13, fill: 0xffcc00, fontWeight: "bold" });
 const CARD_TIER_STYLE   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 10, fontWeight: "bold", fill: 0xffffff });
-const CARD_PAYOUT_STYLE = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 10, fill: 0xaaffaa });
 const AVAILABLE_STYLE   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 11, fill: 0x44ff88, fontWeight: "bold" });
 const ALMOST_STYLE      = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 11, fill: 0xffdd44, fontWeight: "bold" });
 const CLAIMED_STYLE     = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 11, fill: 0x666688 });
@@ -68,8 +66,6 @@ interface CardView {
 
 export class CardGrid extends Container {
   private cardViews = new Map<string, CardView>();
-  private summaryBetText!:     Text;
-  private summaryWinText!:     Text;
   private summaryClaimedText!: Text;
 
   private onCardClick: (cardId: string) => void;
@@ -123,20 +119,9 @@ export class CardGrid extends Container {
     bg.eventMode = "none";
     this.addChild(bg);
 
-    this.summaryBetText = new Text({ text: "Bet: 10 FUN", style: SUMMARY_STYLE });
-    this.summaryBetText.x = 8;
-    this.summaryBetText.y = Math.round((SUMMARY_H - this.summaryBetText.height) / 2);
-    this.addChild(this.summaryBetText);
-
-    this.summaryWinText = new Text({ text: "Win: 0.00 FUN", style: SUMMARY_WIN_STYLE });
-    this.summaryWinText.anchor.set(0.5, 0);
-    this.summaryWinText.x = Math.round(CardGrid.GRID_W / 2);
-    this.summaryWinText.y = Math.round((SUMMARY_H - this.summaryWinText.height) / 2);
-    this.addChild(this.summaryWinText);
-
     this.summaryClaimedText = new Text({ text: "Claimed: 0 / 20", style: SUMMARY_STYLE });
-    this.summaryClaimedText.anchor.set(1, 0);
-    this.summaryClaimedText.x = CardGrid.GRID_W - 8;
+    this.summaryClaimedText.anchor.set(0.5, 0);
+    this.summaryClaimedText.x = Math.round(CardGrid.GRID_W / 2);
     this.summaryClaimedText.y = Math.round((SUMMARY_H - this.summaryClaimedText.height) / 2);
     this.addChild(this.summaryClaimedText);
   }
@@ -168,16 +153,11 @@ export class CardGrid extends Container {
     this.drawCardBg(bg, "normal");
     c.addChild(bg);
 
-    // Header row: tier badge (left) + payout (right)
+    // Header row: tier badge only
     const tierStyle = new TextStyle({ ...CARD_TIER_STYLE, fill: TIER_COLOR[card.tier] });
     const tierText  = new Text({ text: `T${card.tier}`, style: tierStyle });
     tierText.x = TEXT_PAD; tierText.y = 4;
     c.addChild(tierText);
-
-    const payoutText = new Text({ text: `${card.payoutMult.toFixed(2)}x`, style: CARD_PAYOUT_STYLE });
-    payoutText.anchor.set(1, 0);
-    payoutText.x = CARD_W - TEXT_PAD; payoutText.y = 4;
-    c.addChild(payoutText);
 
     // Title — own style so fitTextToBox can mutate fontSize safely
     const nameStyle = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 12, fill: 0xffffff, fontWeight: "bold" });
@@ -239,9 +219,7 @@ export class CardGrid extends Container {
     }
   }
 
-  updateSummary(totalWin: number, claimedCount: number, baseBet: number): void {
-    this.summaryBetText.text     = `Bet: ${baseBet} FUN`;
-    this.summaryWinText.text     = `Win: ${totalWin.toFixed(2)} FUN`;
+  updateSummary(claimedCount: number): void {
     this.summaryClaimedText.text = `Claimed: ${claimedCount} / 20`;
   }
 

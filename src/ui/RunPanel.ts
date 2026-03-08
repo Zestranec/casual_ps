@@ -7,22 +7,20 @@ import {
 } from "pixi.js";
 import { GameState } from "../core/GameStateMachine";
 import { RunController } from "../game/RunController";
-import { EconomyController } from "../game/EconomyController";
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Layout
 // ─────────────────────────────────────────────────────────────────────────────
-const PANEL_W     = 700;
-const SPIN_BTN_W  = 116;
-const SPIN_BTN_H  = 60;
-const PANEL_H     = SPIN_BTN_H + 28; // 88 — tall enough to hold 2 HUD rows + spin button
+const PANEL_W    = 700;
+const SPIN_BTN_W = 116;
+const SPIN_BTN_H = 60;
+const PANEL_H    = SPIN_BTN_H + 28; // 88
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Styles
 // ─────────────────────────────────────────────────────────────────────────────
 const HUD_LABEL = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 13, fill: 0x9999bb });
 const HUD_VAL   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 13, fill: 0xffffff, fontWeight: "bold" });
-const WIN_VAL   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 13, fill: 0xffcc00, fontWeight: "bold" });
 const ACT_OK    = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 13, fill: 0x44ff88, fontWeight: "bold" });
 const ACT_LOW   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 13, fill: 0xff9944, fontWeight: "bold" });
 const ACT_ZERO  = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 13, fill: 0xff2222, fontWeight: "bold" });
@@ -41,41 +39,27 @@ function setDisabled(c: Container, disabled: boolean): void {
  * RunPanel — compact HUD + SPIN button shown below the reels during a run.
  *
  * Layout (PANEL_W = 700):
- *   Left column  (x=14):   two info rows (Bet/Win, Claimed/Actions)
+ *   Left column  (x=14):   Claimed / Actions rows
  *   Right column (x=572):  tall SPIN button
- *
- * Visibility: hidden during "betting" state, shown otherwise.
- * Managed externally via applyVisibility() in main.ts.
  */
 export class RunPanel extends Container {
   static readonly PANEL_H = PANEL_H;
 
   private run: RunController;
-  private economy: EconomyController;
   private onSpin: () => void;
 
-  private betText!:     Text;
-  private winText!:     Text;
   private claimedText!: Text;
   private actionsText!: Text;
   private spinBtn!:     Container;
   private spinBg!:      Graphics;
 
-  // Spin can be blocked by two independent sources:
-  //   1. FSM state is not "idle"  (animation, ended, betting)
-  //   2. Available cards exist — player must choose one before spinning
-  private _lastState:   GameState = "betting";
-  private _spinBlocked  = false;
+  private _lastState:  GameState = "betting";
+  private _spinBlocked = false;
 
-  constructor(
-    run: RunController,
-    economy: EconomyController,
-    onSpin: () => void,
-  ) {
+  constructor(run: RunController, onSpin: () => void) {
     super();
-    this.run     = run;
-    this.economy = economy;
-    this.onSpin  = onSpin;
+    this.run    = run;
+    this.onSpin = onSpin;
     this.build();
   }
 
@@ -83,7 +67,6 @@ export class RunPanel extends Container {
   private build(): void {
     const X = 14;
 
-    // Background — decoration only, must not absorb pointer events
     const bg = new Graphics();
     bg.roundRect(0, 0, PANEL_W, PANEL_H, 8);
     bg.fill({ color: 0x16162e, alpha: 0.95 });
@@ -93,25 +76,17 @@ export class RunPanel extends Container {
 
     // ── HUD rows (left of SPIN button) ────────────────────────────────────
     const SPIN_AREA_LEFT = PANEL_W - SPIN_BTN_W - X; // 572
-    const ROW1_Y = Math.round((PANEL_H / 2) - 24);
+    const ROW1_Y = Math.round((PANEL_H / 2) - 14);
     const ROW2_Y = ROW1_Y + 26;
 
-    // Row 1: Bet / Win
-    this.addChild(Object.assign(new Text({ text: "Bet:", style: HUD_LABEL }), { x: X, y: ROW1_Y }));
-    this.betText = Object.assign(new Text({ text: "—", style: HUD_VAL }), { x: X + 34, y: ROW1_Y });
-    this.addChild(this.betText);
-
-    this.addChild(Object.assign(new Text({ text: "Win:", style: HUD_LABEL }), { x: X + 160, y: ROW1_Y }));
-    this.winText = Object.assign(new Text({ text: "—", style: WIN_VAL }), { x: X + 196, y: ROW1_Y });
-    this.addChild(this.winText);
-
-    // Row 2: Claimed / Actions
-    this.addChild(Object.assign(new Text({ text: "Claimed:", style: HUD_LABEL }), { x: X, y: ROW2_Y }));
-    this.claimedText = Object.assign(new Text({ text: "0 / 20", style: HUD_VAL }), { x: X + 70, y: ROW2_Y });
+    // Row 1: Claimed
+    this.addChild(Object.assign(new Text({ text: "Claimed:", style: HUD_LABEL }), { x: X, y: ROW1_Y }));
+    this.claimedText = Object.assign(new Text({ text: "0 / 20", style: HUD_VAL }), { x: X + 70, y: ROW1_Y });
     this.addChild(this.claimedText);
 
-    this.addChild(Object.assign(new Text({ text: "Actions:", style: HUD_LABEL }), { x: X + 160, y: ROW2_Y }));
-    this.actionsText = Object.assign(new Text({ text: "—", style: ACT_OK }), { x: X + 232, y: ROW2_Y });
+    // Row 2: Actions
+    this.addChild(Object.assign(new Text({ text: "Actions:", style: HUD_LABEL }), { x: X, y: ROW2_Y }));
+    this.actionsText = Object.assign(new Text({ text: "—", style: ACT_OK }), { x: X + 70, y: ROW2_Y });
     this.addChild(this.actionsText);
 
     // Thin vertical divider before spin button
@@ -149,9 +124,7 @@ export class RunPanel extends Container {
   // ── Public API ─────────────────────────────────────────────────────────────
 
   /** Update displayed values. Called after every reel refresh and claim. */
-  refresh(totalWin: number, claimedCount: number): void {
-    this.betText.text     = `${this.economy.baseBet} FUN`;
-    this.winText.text     = `${totalWin.toFixed(2)} FUN`;
+  refresh(claimedCount: number): void {
     this.claimedText.text = `${claimedCount} / 20`;
 
     const acts = this.run.actions;
@@ -163,20 +136,15 @@ export class RunPanel extends Container {
                    ACT_OK;
   }
 
-  /**
-   * Enable / disable SPIN based on FSM state.
-   * Does NOT control panel visibility.
-   * The button stays disabled if `_spinBlocked` is true even when state = "idle".
-   */
+  /** Enable / disable SPIN based on FSM state. */
   syncState(state: GameState): void {
     this._lastState = state;
     this._updateSpin();
   }
 
   /**
-   * Block or unblock the SPIN button independently of FSM state.
-   * Set to true when available cards exist (player must claim one first).
-   * Set to false after a claim clears the available set.
+   * Block or unblock SPIN independently of FSM state.
+   * Set true when available cards exist (player must claim one first).
    */
   setSpinBlocked(blocked: boolean): void {
     this._spinBlocked = blocked;

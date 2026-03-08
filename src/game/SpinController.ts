@@ -1,5 +1,5 @@
 import { RNG } from "../core/RNG";
-import { TapeSlotModel, REEL_COUNT } from "./TapeSlotModel";
+import { TapeSlotModel } from "./TapeSlotModel";
 import { GameStateMachine } from "../core/GameStateMachine";
 import { RunController } from "./RunController";
 import { ReelAnimator } from "./ReelAnimator";
@@ -58,7 +58,9 @@ export class SpinController {
     const deltas: number[] = [];
     const toOffsets: number[] = [];
 
-    for (let i = 0; i < REEL_COUNT; i++) {
+    // Scale loops to the model's actual reel count (set by level config).
+    const reelCount = this.model.reels.length;
+    for (let i = 0; i < reelCount; i++) {
       // Always consume RNG for every reel so the outcome for reel i is the same
       // regardless of which other reels happen to be locked this spin.
       const rawDelta = rng.nextInt(1, this.model.tapeLength - 1);
@@ -77,7 +79,7 @@ export class SpinController {
 
     // If every reel is locked there is nothing to animate — resolve immediately.
     if (deltas.every((d) => d === 0)) {
-      for (let i = 0; i < REEL_COUNT; i++) {
+      for (let i = 0; i < reelCount; i++) {
         this.model.reels[i].setOffset(toOffsets[i]);
       }
       this.fsm.transition("resolve");
@@ -88,7 +90,7 @@ export class SpinController {
 
     this.animator.animate(this._lastSpin, () => {
       // Snap model to the pre-decided final offsets — guaranteed to match animation endpoint.
-      for (let i = 0; i < REEL_COUNT; i++) {
+      for (let i = 0; i < reelCount; i++) {
         this.model.reels[i].setOffset(toOffsets[i]);
       }
       this.fsm.transition("resolve");
