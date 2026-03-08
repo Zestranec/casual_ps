@@ -1,0 +1,987 @@
+import {
+  Application, Container, Graphics, Rectangle,
+  Sprite, Text, TextStyle, Texture, FederatedPointerEvent,
+} from "pixi.js";
+import { GameStateMachine, GameState } from "./core/GameStateMachine";
+import { getNearMissHint } from "./game/CardEvaluator";
+import { CARDS } from "./config/cards";
+import { TapeSlotModel, REEL_COUNT } from "./game/TapeSlotModel";
+import { VisibleDigits } from "./game/TapeReel";
+import { getSymbolTexture } from "./game/CardTextures";
+import { ReelAnimator, ReelViewRef } from "./game/ReelAnimator";
+import { SpinController } from "./game/SpinController";
+import { RunController } from "./game/RunController";
+import { CardController } from "./game/CardController";
+import { EconomyController } from "./game/EconomyController";
+import { DevDrawer } from "./ui/DevDrawer";
+import { RunPanel } from "./ui/RunPanel";
+import { CardGrid } from "./ui/CardGrid";
+import { BetPanel } from "./ui/BetPanel";
+import { ToastMessage } from "./ui/ToastMessage";
+import { LoadingScreen, loadAssets, logoUrl } from "./ui/LoadingScreen";
+import { RulesScreen, rulesAlreadySeen } from "./ui/RulesScreen";
+import { computeLayout } from "./ui/layouts";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REEL VISUAL CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+const REEL_WIDTH      = 120; // wider for poker card text (e.g. "A♥", "K♠", "★")
+const REEL_HEIGHT     = 160;
+const REEL_GAP        = 8;
+const REEL_AREA_WIDTH = REEL_COUNT * REEL_WIDTH + (REEL_COUNT - 1) * REEL_GAP;
+
+// ── Per-reel control sizes ────────────────────────────────────────────────────
+const NUDGE_H   = 18;  // nudge triangle button height
+const NUDGE_GAP = 3;   // gap between nudge button and reel box
+const LOCK_H    = 16;  // lock button height (below reel)
+
+// Controls above and below each reel box:
+const CTRL_ABOVE  = NUDGE_H + NUDGE_GAP;              // 21 px
+const CTRL_BELOW  = NUDGE_GAP + NUDGE_H + 3 + LOCK_H; // 40 px  (gap+nudge+gap+lock)
+const REEL_SLOT_H = CTRL_ABOVE + REEL_HEIGHT + CTRL_BELOW; // 221 px per slot
+
+// Symbol sprite dimensions — must match SYMBOL_W / SYMBOL_H in ReelAnimator.ts.
+const SYMBOL_W = 96; // card width — centred within REEL_WIDTH
+const SYMBOL_H = 96; // card height — partial visibility via container mask
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LAYOUT CONSTANTS
+//
+//   gameRoot.y = PAD_TOP = 16
+//
+//   topBlock (y=0)
+//   ├── title              y = 38  (anchor-bottom; text above; 4 px gap to slot top)
+//   ├── reelsContainer     y = REEL_SLOT_Y = 42
+//   │     └── slot[i]        y = 0 within reelsContainer
+//   │           ├── nudgeUp      y = 0
+//   │           ├── reelBox      y = CTRL_ABOVE = 21   (animated by ReelAnimator)
+//   │           ├── nudgeDown    y = 21 + 160 + 3 = 184
+//   │           └── lockBtn      y = 205
+//   ├── runPanel           y = PANEL_TOP = 277  (run states)
+//   └── betPanelContainer  y = PANEL_TOP = 277  (betting only)
+//
+//   cardsBlock  y = CARDS_TOP = 381  (= PANEL_TOP + RunPanel.PANEL_H + BLOCK_GAP)
+//
+// cardsBlock.y is a compile-time constant — overlap is impossible.
+// ─────────────────────────────────────────────────────────────────────────────
+const UI_W        = 700;
+const PAD_TOP     = 16;
+const REEL_SLOT_Y = 42;  // reelsContainer.y in topBlock (4 px below title bottom at 38)
+const PANEL_GAP   = 14;
+const BLOCK_GAP   = 16;
+const PANEL_TOP   = REEL_SLOT_Y + REEL_SLOT_H + PANEL_GAP; // 42 + 221 + 14 = 277
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TEXT STYLES
+// ─────────────────────────────────────────────────────────────────────────────
+const END_TITLE_STYLE  = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 20, fill: 0xff4444, fontWeight: "bold" });
+const END_STAT_STYLE   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 14, fill: 0xffffff });
+const END_PROFIT_POS   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 16, fill: 0x44ff88, fontWeight: "bold" });
+const END_PROFIT_NEG   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 16, fill: 0xff4444, fontWeight: "bold" });
+const END_BTN_STYLE    = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 14, fill: 0xffffff, fontWeight: "bold" });
+
+// Lock button text styles (pre-allocated, reused in updateLockOverlay)
+const LOCK_BTN_OFF_STYLE  = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 10, fill: 0x6666aa });
+const LOCK_BTN_ON_STYLE   = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 10, fill: 0xffaa00, fontWeight: "bold" });
+const NEAR_MISS_LBL_STYLE = new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 10, fill: 0xff8800, fontWeight: "bold" });
+
+// ─────────────────────────────────────────────────────────────────────────────
+// REEL VIEW
+//
+//   slot        — outer wrapper added to reelsContainer; holds nudge+lock btns
+//   container   — reel box at y=CTRL_ABOVE in slot; THIS is what ReelAnimator
+//                 touches (text positions, clip mask). Never move it externally.
+//   nudgeUp/Down — triangle buttons outside the reel box
+//   lockBtn     — small bar below nudgeDown
+//   centerHit   — invisible hit-zone inside container for lock-toggle on click
+// ─────────────────────────────────────────────────────────────────────────────
+interface ReelView extends ReelViewRef {
+  slot:           Container;
+  container:      Container;
+  symbolsLayer:   Container;
+  aboveSprite:    Sprite;
+  centerSprite:   Sprite;
+  belowSprite:    Sprite;
+  lockOverlay:    Graphics;
+  nudgeUp:        Container;
+  nudgeDown:      Container;
+  lockBtn:        Container;
+  lockBtnBg:      Graphics;
+  lockBtnLabel:   Text;
+  centerHit:      Container;
+  /** Amber glow ring shown during near-miss animation (alpha starts at 0). */
+  nearMissGlow:   Graphics;
+  /** "NEED X" / "ALMOST" label shown during near-miss animation (alpha=0). */
+  nearMissLabel:  Text;
+}
+
+function createReelView(): ReelView {
+  const CX = REEL_WIDTH / 2; // 36
+  const HW = 14;              // triangle half-width
+
+  // ── Slot (outer wrapper) ────────────────────────────────────────────────────
+  const slot = new Container();
+
+  // ── Nudge UP triangle (above reel, y=0 in slot) ─────────────────────────────
+  const nudgeUp = new Container();
+  nudgeUp.y         = 0;
+  nudgeUp.eventMode = "static";
+  nudgeUp.cursor    = "pointer";
+  nudgeUp.hitArea   = new Rectangle(CX - HW, 0, HW * 2, NUDGE_H);
+  const nudgeUpGfx  = new Graphics();
+  nudgeUpGfx.poly([CX, 2, CX + HW, NUDGE_H - 2, CX - HW, NUDGE_H - 2]);
+  nudgeUpGfx.fill({ color: 0x3366cc });
+  nudgeUp.addChild(nudgeUpGfx);
+  nudgeUp.on("pointerover", () => { nudgeUpGfx.tint = 0xaaddff; });
+  nudgeUp.on("pointerout",  () => { nudgeUpGfx.tint = 0xffffff; });
+  slot.addChild(nudgeUp);
+
+  // ── Reel box (animated by ReelAnimator, y=CTRL_ABOVE in slot) ───────────────
+  const container = new Container();
+  container.y = CTRL_ABOVE; // 21
+
+  const bg = new Graphics();
+  bg.roundRect(0, 0, REEL_WIDTH, REEL_HEIGHT, 6);
+  bg.fill({ color: 0x22223a });
+  bg.stroke({ color: 0x4a4a7a, width: 2 });
+  bg.eventMode = "none";
+  container.addChild(bg);
+
+  // symbolsLayer: blur filter is applied here during spin; UI overlays stay outside.
+  const symbolsLayer = new Container();
+  container.addChild(symbolsLayer);
+
+  const aboveSprite = new Sprite(Texture.WHITE);
+  aboveSprite.anchor.set(0.5);
+  aboveSprite.x = CX; aboveSprite.y = -16; // Y_CENTER - SLOT_H; top 1/3 peeks below mask top
+  aboveSprite.width = SYMBOL_W; aboveSprite.height = SYMBOL_H;
+  aboveSprite.alpha = 0.4;
+  symbolsLayer.addChild(aboveSprite);
+
+  const centerSprite = new Sprite(Texture.WHITE);
+  centerSprite.anchor.set(0.5);
+  centerSprite.x = CX; centerSprite.y = REEL_HEIGHT / 2;
+  centerSprite.width = SYMBOL_W; centerSprite.height = SYMBOL_H;
+  symbolsLayer.addChild(centerSprite);
+
+  const belowSprite = new Sprite(Texture.WHITE);
+  belowSprite.anchor.set(0.5);
+  belowSprite.x = CX; belowSprite.y = 176; // Y_CENTER + SLOT_H; bottom 1/3 peeks above mask bottom
+  belowSprite.width = SYMBOL_W; belowSprite.height = SYMBOL_H;
+  belowSprite.alpha = 0.4;
+  symbolsLayer.addChild(belowSprite);
+
+  // Permanent clip mask — top/bottom cards visible only in the 1/3 that falls within the window.
+  const reelMask = new Graphics();
+  reelMask.rect(0, 0, REEL_WIDTH, REEL_HEIGHT);
+  reelMask.fill({ color: 0xffffff });
+  container.addChild(reelMask);
+  container.mask = reelMask;
+
+  const lockOverlay = new Graphics();
+  lockOverlay.roundRect(1, 1, REEL_WIDTH - 2, REEL_HEIGHT - 2, 5);
+  lockOverlay.fill({ color: 0xffaa00, alpha: 0.18 });
+  lockOverlay.stroke({ color: 0xffaa00, width: 2 });
+  lockOverlay.visible   = false;
+  lockOverlay.eventMode = "none";
+  container.addChild(lockOverlay);
+
+  // centerHit: invisible hit zone over center digit for lock-toggle click
+  const centerHit  = new Container();
+  centerHit.eventMode = "none"; // enabled by syncReelControls when idle
+  centerHit.cursor    = "pointer";
+  centerHit.hitArea   = new Rectangle(0, REEL_HEIGHT / 2 - 32, REEL_WIDTH, 64);
+  container.addChild(centerHit);
+
+  slot.addChild(container);
+
+  // ── Nudge DOWN triangle (below reel box) ────────────────────────────────────
+  const nudgeDwnY  = CTRL_ABOVE + REEL_HEIGHT + NUDGE_GAP; // 184
+  const nudgeDown  = new Container();
+  nudgeDown.y         = nudgeDwnY;
+  nudgeDown.eventMode = "static";
+  nudgeDown.cursor    = "pointer";
+  nudgeDown.hitArea   = new Rectangle(CX - HW, 0, HW * 2, NUDGE_H);
+  const nudgeDwnGfx   = new Graphics();
+  nudgeDwnGfx.poly([CX, NUDGE_H - 2, CX + HW, 2, CX - HW, 2]);
+  nudgeDwnGfx.fill({ color: 0x3366cc });
+  nudgeDown.addChild(nudgeDwnGfx);
+  nudgeDown.on("pointerover", () => { nudgeDwnGfx.tint = 0xaaddff; });
+  nudgeDown.on("pointerout",  () => { nudgeDwnGfx.tint = 0xffffff; });
+  slot.addChild(nudgeDown);
+
+  // ── Lock button (below nudgeDown) ───────────────────────────────────────────
+  const lockBtnY = nudgeDwnY + NUDGE_H + 3; // 205
+  const lockBtn  = new Container();
+  lockBtn.y         = lockBtnY;
+  lockBtn.eventMode = "static";
+  lockBtn.cursor    = "pointer";
+  lockBtn.hitArea   = new Rectangle(0, 0, REEL_WIDTH, LOCK_H);
+
+  const lockBtnBg = new Graphics();
+  lockBtnBg.roundRect(0, 0, REEL_WIDTH, LOCK_H, 3);
+  lockBtnBg.fill({ color: 0x1e1e30 });
+  lockBtnBg.stroke({ color: 0x404060, width: 1 });
+  lockBtn.addChild(lockBtnBg);
+
+  const lockBtnLabel = new Text({ text: "LOCK", style: LOCK_BTN_OFF_STYLE });
+  lockBtnLabel.anchor.set(0.5, 0.5);
+  lockBtnLabel.x = CX;
+  lockBtnLabel.y = LOCK_H / 2;
+  lockBtn.addChild(lockBtnLabel);
+
+  lockBtn.on("pointerover", () => { lockBtnBg.tint = 0xbbbbff; });
+  lockBtn.on("pointerout",  () => { lockBtnBg.tint = 0xffffff; });
+  slot.addChild(lockBtn);
+
+  // ── Near-miss overlay (amber glow ring + label) ─────────────────────────────
+  // Both are non-interactive and start invisible; animated by showNearMiss().
+  const nearMissGlow = new Graphics();
+  // A ring slightly outside the reel box edges for a "halo" effect.
+  nearMissGlow.roundRect(-3, -3, REEL_WIDTH + 6, REEL_HEIGHT + 6, 8);
+  nearMissGlow.stroke({ color: 0xff8800, width: 4 });
+  nearMissGlow.roundRect(0, 0, REEL_WIDTH, REEL_HEIGHT, 6);
+  nearMissGlow.fill({ color: 0xff8800, alpha: 0.10 });
+  nearMissGlow.alpha     = 0;
+  nearMissGlow.eventMode = "none";
+  container.addChild(nearMissGlow);
+
+  const nearMissLabel = new Text({ text: "", style: NEAR_MISS_LBL_STYLE });
+  nearMissLabel.anchor.set(0.5, 0);
+  nearMissLabel.x        = CX;
+  nearMissLabel.y        = 6;  // inside reel box, above the "above" digit
+  nearMissLabel.alpha    = 0;
+  nearMissLabel.eventMode = "none";
+  container.addChild(nearMissLabel);
+
+  return {
+    slot, container, symbolsLayer,
+    aboveSprite, centerSprite, belowSprite,
+    lockOverlay,
+    nudgeUp, nudgeDown,
+    lockBtn, lockBtnBg, lockBtnLabel,
+    centerHit,
+    nearMissGlow, nearMissLabel,
+  };
+}
+
+function updateReelView(view: ReelView, digits: VisibleDigits): void {
+  // Reversed layout — matches downward animation direction:
+  //   aboveSprite shows tape[offset+1] (next symbol entering from top)
+  //   belowSprite shows tape[offset-1] (symbol that just passed center)
+  view.aboveSprite.texture  = getSymbolTexture(digits.below);
+  view.centerSprite.texture = getSymbolTexture(digits.center);
+  view.belowSprite.texture  = getSymbolTexture(digits.above);
+}
+
+function updateLockOverlay(view: ReelView, locked: boolean): void {
+  view.lockOverlay.visible = locked;
+  // Update lock button appearance
+  view.lockBtnBg.clear();
+  view.lockBtnBg.roundRect(0, 0, REEL_WIDTH, LOCK_H, 3);
+  if (locked) {
+    view.lockBtnBg.fill({ color: 0x3a2200 });
+    view.lockBtnBg.stroke({ color: 0xffaa00, width: 1 });
+    view.lockBtnLabel.text  = "UNLOCK";
+    view.lockBtnLabel.style = LOCK_BTN_ON_STYLE;
+  } else {
+    view.lockBtnBg.fill({ color: 0x1e1e30 });
+    view.lockBtnBg.stroke({ color: 0x404060, width: 1 });
+    view.lockBtnLabel.text  = "LOCK";
+    view.lockBtnLabel.style = LOCK_BTN_OFF_STYLE;
+  }
+}
+
+// Disable/enable a control button with alpha + eventMode.
+function setCtrlDisabled(c: Container, disabled: boolean): void {
+  c.alpha     = disabled ? 0.30 : 1.0;
+  c.eventMode = disabled ? "none" : "static";
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+async function main() {
+  const app = new Application();
+  await app.init({
+    background:   0x000000,
+    resizeTo:     window,
+    antialias:    true,
+    resolution:   window.devicePixelRatio || 1,
+    autoDensity:  true,
+    roundPixels:  true,
+  });
+  document.body.appendChild(app.canvas);
+
+  // ── Loading screen ─────────────────────────────────────────────────────────
+  const MIN_DURATION = 1500; // ms
+  const startTs      = performance.now();
+
+  const loading = new LoadingScreen(logoUrl());
+  loading.layout(app.screen.width, app.screen.height);
+  app.stage.addChild(loading);
+
+  const resizeLoading = () => loading.layout(app.screen.width, app.screen.height);
+  window.addEventListener("resize", resizeLoading);
+
+  // Ticker drives all loader animations (bar lerp, glow pulse).
+  const loaderTick = () => loading.tick(app.ticker.deltaMS);
+  app.ticker.add(loaderTick);
+
+  // Real asset loading — reports progress 0..1 if there are actual assets.
+  // When there are none, the fake-cap easing drives the bar.
+  const assetsPromise = loadAssets((p) => loading.setRealProgress(p));
+
+  // Wait for BOTH: assets loaded AND minimum display duration elapsed.
+  await new Promise<void>((r) => {
+    assetsPromise.then(() => {
+      const remaining = Math.max(0, MIN_DURATION - (performance.now() - startTs));
+      setTimeout(r, remaining);
+    });
+  });
+
+  // Signal loader: bar now animates smoothly to 100%.
+  loading.complete();
+
+  // Wait until the bar visually reaches 100% (the lerp finishes).
+  await new Promise<void>((r) => {
+    const poll = () => loading.isDisplayDone ? r() : requestAnimationFrame(poll);
+    requestAnimationFrame(poll);
+  });
+
+  // Tear down loader.
+  app.ticker.remove(loaderTick);
+  window.removeEventListener("resize", resizeLoading);
+  app.stage.removeChild(loading);
+  loading.destroy({ children: true });
+  // ── End loading screen ─────────────────────────────────────────────────────
+
+  // ── Rules screen ───────────────────────────────────────────────────────────
+  if (!rulesAlreadySeen()) {
+    const rules = new RulesScreen();
+    rules.layout(app.screen.width, app.screen.height);
+    app.stage.addChild(rules);
+
+    const onRulesResize = () => rules.layout(app.screen.width, app.screen.height);
+    window.addEventListener("resize", onRulesResize);
+
+    await new Promise<void>((r) => { rules.onPlay = r; });
+
+    window.removeEventListener("resize", onRulesResize);
+    app.stage.removeChild(rules);
+    rules.destroy({ children: true });
+  }
+  // ── End rules screen ───────────────────────────────────────────────────────
+
+  const fsm     = new GameStateMachine();
+  const model   = new TapeSlotModel(42);
+  const run     = new RunController();
+  const cards   = new CardController();
+  const economy = new EconomyController();
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // GAME ROOT
+  //
+  // Z-ORDER within gameRoot:
+  //   index 0 — cardsBlock  (behind — never intercepts topBlock events)
+  //   index 1 — topBlock    (in front — hit-tested first by Pixi)
+  // ══════════════════════════════════════════════════════════════════════════
+  const gameRoot = new Container();
+  app.stage.addChild(gameRoot);
+
+  // ── cardsBlock — index 0 (behind) ─────────────────────────────────────────
+  const CARDS_TOP = PANEL_TOP + RunPanel.PANEL_H + BLOCK_GAP; // 277 + 88 + 16 = 381
+
+  const cardsBlock = new Container();
+  cardsBlock.y         = CARDS_TOP;
+  cardsBlock.eventMode = "passive";
+  gameRoot.addChild(cardsBlock);
+
+  const cardsMask = new Graphics();
+  cardsMask.rect(0, 0, CardGrid.GRID_W, CardGrid.TOTAL_H);
+  cardsMask.fill(0xffffff);
+  cardsBlock.addChild(cardsMask);
+  cardsBlock.mask = cardsMask;
+
+  const cardGrid = new CardGrid((cardId) => handleCardClick(cardId), app.ticker);
+  cardsBlock.addChild(cardGrid);
+
+  // ── topBlock — index 1 (in front, hit-tested first) ───────────────────────
+  const topBlock = new Container();
+  gameRoot.addChild(topBlock);
+
+  // Title — bottom-anchored, sits 4 px above the first nudge button row
+  const title = new Text({
+    text: "PUZZLE SLOT",
+    style: new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 28, fill: 0xffcc00, fontWeight: "bold", letterSpacing: 4 }),
+  });
+  title.anchor.set(0.5, 1);
+  title.x = Math.round(UI_W / 2);
+  title.y = REEL_SLOT_Y - 4; // 38  — bottom of text, 4 px gap to slot top
+  topBlock.addChild(title);
+
+  // Reels container — holds one slot per reel
+  const reelsContainer = new Container();
+  reelsContainer.x = Math.round((UI_W - REEL_AREA_WIDTH) / 2);
+  reelsContainer.y = REEL_SLOT_Y; // 42
+  topBlock.addChild(reelsContainer);
+
+  const reelViews: ReelView[] = [];
+  for (let i = 0; i < REEL_COUNT; i++) {
+    const rv  = createReelView();
+    rv.slot.x = i * (REEL_WIDTH + REEL_GAP);
+    reelsContainer.addChild(rv.slot); // add the SLOT, not the inner container
+    reelViews.push(rv);
+
+    // Capture index for event closures (function declarations are hoisted,
+    // so doNudge / doToggleLock are accessible here even though declared later).
+    const idx = i;
+    rv.nudgeUp.on("pointerdown",   (e: FederatedPointerEvent) => { e.stopPropagation(); doNudge(idx, -1); });
+    rv.nudgeDown.on("pointerdown", (e: FederatedPointerEvent) => { e.stopPropagation(); doNudge(idx, +1); });
+    rv.lockBtn.on("pointerdown",   (e: FederatedPointerEvent) => { e.stopPropagation(); doToggleLock(idx); });
+    rv.centerHit.on("pointerdown", (e: FederatedPointerEvent) => { e.stopPropagation(); doToggleLock(idx); });
+  }
+
+  // ── Near-miss reel animation ───────────────────────────────────────────────
+  let _nmCancelFn: (() => void) | null = null;
+
+  function showNearMiss(
+    reelIndices: number[],
+    wanted?: string,
+    durationMs = 1400,
+  ): void {
+    // Cancel any running animation first.
+    if (_nmCancelFn) { _nmCancelFn(); _nmCancelFn = null; }
+    // Reset all reels to invisible.
+    for (const rv of reelViews) {
+      rv.nearMissGlow.alpha  = 0;
+      rv.nearMissLabel.alpha = 0;
+    }
+    if (reelIndices.length === 0) return;
+
+    const FADE_IN  = 150;
+    const FADE_OUT = 400;
+    const label    = wanted !== undefined ? `NEED ${wanted}` : "ALMOST";
+    for (const idx of reelIndices) {
+      const rv = reelViews[idx];
+      if (rv) rv.nearMissLabel.text = label;
+    }
+
+    const startTs = performance.now();
+    const tick = (): void => {
+      const elapsed = performance.now() - startTs;
+      const hold    = Math.max(0, durationMs - FADE_IN - FADE_OUT);
+      let   alpha: number;
+
+      if (elapsed < FADE_IN) {
+        alpha = elapsed / FADE_IN;
+      } else if (elapsed < FADE_IN + hold) {
+        alpha = 1;
+      } else if (elapsed < durationMs) {
+        alpha = 1 - (elapsed - FADE_IN - hold) / FADE_OUT;
+      } else {
+        // Animation complete — clean up.
+        for (const idx of reelIndices) {
+          const rv = reelViews[idx];
+          if (rv) { rv.nearMissGlow.alpha = 0; rv.nearMissLabel.alpha = 0; }
+        }
+        app.ticker.remove(tick);
+        _nmCancelFn = null;
+        return;
+      }
+
+      for (const idx of reelIndices) {
+        const rv = reelViews[idx];
+        if (rv) { rv.nearMissGlow.alpha = alpha; rv.nearMissLabel.alpha = alpha; }
+      }
+    };
+
+    _nmCancelFn = () => {
+      app.ticker.remove(tick);
+      for (const idx of reelIndices) {
+        const rv = reelViews[idx];
+        if (rv) { rv.nearMissGlow.alpha = 0; rv.nearMissLabel.alpha = 0; }
+      }
+    };
+    app.ticker.add(tick);
+  }
+
+  // ── RunPanel + BetPanel ────────────────────────────────────────────────────
+  const animator       = new ReelAnimator(reelViews, model, app.ticker, getSymbolTexture);
+  const spinController = new SpinController(model, fsm, run, animator);
+
+  /**
+   * True when the last spin drained actions to 0 but left claimable cards.
+   * The run must NOT end until the player claims one card (or the card is
+   * a tier-2+ card that restores an action, in which case the run continues).
+   */
+  let endAfterClaim = false;
+
+  /**
+   * True immediately after a card is claimed, until the next SPIN starts.
+   * While true: SPIN is allowed, NUDGE and LOCK are blocked (with toast).
+   */
+  let postClaimSpinRequired = false;
+
+  function doSpin(): void {
+    if (fsm.state !== "idle") return;
+    if (!run.canSpend(1)) return;
+
+    // Lift the post-claim gate the moment a spin is committed.
+    postClaimSpinRequired = false;
+
+    // Clear all highlights immediately when spin starts.
+    // clearAvailable() wipes available + both almost sets in one call.
+    const hadAvailable = cards.hasAvailable();
+    const hadAlmost    = cards.almostShownIds.size > 0;
+    if (hadAvailable || hadAlmost) {
+      cards.clearAvailable();
+      refreshAllCards();
+      if (hadAvailable) toast.show("SKIPPED", { duration: 800 });
+    }
+
+    spinController.requestSpin(() => {
+      // onSpinResolved evaluates ready cards AND recomputes almostShownIds.
+      const digits = model.getVisibleCenterDigits();
+      cards.onSpinResolved(digits);
+
+      refreshAllReels();
+      devDrawer.devPanel.refreshInfo();
+      if (spinController.lastSpin) devDrawer.devPanel.showLastSpin(spinController.lastSpin.deltas);
+
+      if (run.actions === 0) {
+        if (!cards.hasAvailable()) {
+          // No actions, no claimable cards — end immediately.
+          fsm.transition("ended");
+        } else {
+          // No actions, but there are claimable cards — let player claim first.
+          endAfterClaim = true;
+          toast.show("LAST CLAIM!", { duration: 60_000 });
+        }
+      } else if (cards.hasAvailable()) {
+        toast.show("CHOOSE ONE OR SPIN ANYWAY", { duration: 60_000 });
+      } else if (cards.almostShownIds.size > 0) {
+        toast.show("SO CLOSE...", { duration: 60_000 });
+
+        // Near-miss reel highlight — pick the best almost card and get a hint.
+        const almostCards = CARDS.filter(c => cards.almostShownIds.has(c.id));
+        almostCards.sort((a, b) =>
+          b.payoutMult - a.payoutMult || b.tier - a.tier || a.id.localeCompare(b.id),
+        );
+        const best = almostCards[0];
+        if (best) {
+          const hint = getNearMissHint(best, digits);
+          if (hint) showNearMiss(hint.reels, hint.wanted as string | undefined);
+        }
+      }
+    });
+  }
+
+  const runPanel = new RunPanel(run, economy, doSpin);
+  runPanel.y = PANEL_TOP;
+  topBlock.addChild(runPanel);
+
+  const betPanelContainer = new Container();
+  betPanelContainer.y = PANEL_TOP;
+  topBlock.addChild(betPanelContainer);
+
+  const betPanel = new BetPanel(economy, run, () => handleStartRun());
+  betPanelContainer.addChild(betPanel);
+
+  // ── Toast — non-interactive message layer above the cards grid ────────────
+  // Z-index 2 (after cardsBlock=0, topBlock=1): renders on top but never
+  // intercepts clicks because container.eventMode = "none".
+  const toast = new ToastMessage(app.ticker);
+  toast.container.x = Math.round(UI_W / 2); // horizontally centred over the grid
+  toast.container.y = CARDS_TOP - 20;        // just above the cards grid
+  gameRoot.addChild(toast.container);
+
+  // ── DevDrawer ─────────────────────────────────────────────────────────────
+  const devDrawer = new DevDrawer(
+    model, fsm, run,
+    app.ticker,
+    () => { refreshAllReels(); devDrawer.devPanel.refreshInfo(); },
+    () => {
+      spinController.reset();
+      devDrawer.devPanel.clearLastSpin();
+      for (let i = 0; i < REEL_COUNT; i++) updateLockOverlay(reelViews[i], false);
+    },
+    doSpin,
+  );
+  // Reel selector + per-reel nudge buttons in DevPanel are superseded by the
+  // on-reel triangle controls; hide them to avoid duplicates.
+  devDrawer.devPanel.hideNudgeSection();
+
+  // ── End overlay ─────────────────────────────────────────────────────────────
+  const endOverlayData = buildEndOverlay();
+  const endOverlay     = endOverlayData.container;
+  endOverlay.visible   = false;
+  app.stage.addChild(endOverlay);
+
+  app.stage.addChild(devDrawer.container); // topmost — handle always hittable
+
+  // ── Visibility ──────────────────────────────────────────────────────────────
+  function applyVisibility(state: GameState): void {
+    const betting = state === "betting";
+    const inRun   = !betting;
+
+    title.visible             = inRun;
+    runPanel.visible          = inRun;
+    betPanelContainer.visible = betting;
+
+    cardsBlock.visible        = inRun;
+    if (betting) toast.container.visible = false; // cancel any mid-animation toast
+    endOverlay.visible = state === "ended";
+
+    if (state === "ended") refreshEndOverlay();
+  }
+
+  // ── Per-reel action handlers ────────────────────────────────────────────────
+
+  function doNudge(reelIdx: number, direction: -1 | 1): void {
+    if (fsm.state !== "idle") return;
+    if (postClaimSpinRequired) {
+      toast.show("Spin to unlock new card", { duration: 1500 });
+      return;
+    }
+    const cost = run.getNudgeCost();
+    if (!run.canSpend(cost)) return;
+    run.spend(cost);
+    run.recordNudge();
+    model.reels[reelIdx].nudge(direction);
+    refreshAllReels();
+    refreshCardsFromCurrentDigits(); // re-evaluate READY/ALMOST with new digits
+    devDrawer.devPanel.refreshInfo();
+    if (run.actions === 0) fsm.transition("ended");
+  }
+
+  function doToggleLock(reelIdx: number): void {
+    if (fsm.state !== "idle") return;
+    if (postClaimSpinRequired) {
+      toast.show("Spin to unlock new card", { duration: 1500 });
+      return;
+    }
+    const alreadyLocked = model.isLocked(reelIdx);
+    if (!alreadyLocked) {
+      // Locking costs 1 action; enforce max-2-holds limit.
+      if (model.lockedCount() >= 2) {
+        toast.show("Max 2 holds", { duration: 1500 });
+        return;
+      }
+      if (!run.canSpend(run.getLockCost())) return;
+      run.spend(run.getLockCost());
+    }
+    model.toggleLocked(reelIdx);
+    updateLockOverlay(reelViews[reelIdx], model.isLocked(reelIdx));
+    devDrawer.devPanel.refreshInfo();
+    refreshAllCards(); // keep card visuals in sync with current state
+    syncReelControls(fsm.state);
+  }
+
+  /**
+   * Enable or disable per-reel nudge/lock controls based on game state.
+   * Called whenever state transitions or actions count changes.
+   *
+   * Rules:
+   *   nudge: only in "idle" AND actions >= nudge cost
+   *   lock:  only in "idle"
+   */
+  function syncReelControls(state: GameState): void {
+    const nudgeCost = run.getNudgeCost();
+    const canNudge  = state === "idle" && run.canSpend(nudgeCost) && !postClaimSpinRequired;
+    const lockBase  = state === "idle" && !postClaimSpinRequired;
+
+    for (let i = 0; i < reelViews.length; i++) {
+      const rv        = reelViews[i];
+      const isLocked  = model.isLocked(i);
+      // Can lock: not already at limit (unless this reel is already locked = can unlock)
+      const canLock   = lockBase && (isLocked || (run.canSpend(run.getLockCost()) && model.lockedCount() < 2));
+      setCtrlDisabled(rv.nudgeUp,   !canNudge);
+      setCtrlDisabled(rv.nudgeDown, !canNudge);
+      setCtrlDisabled(rv.lockBtn,   !canLock);
+      rv.centerHit.eventMode = canLock ? "static" : "none";
+    }
+  }
+
+  // ── Game handlers ───────────────────────────────────────────────────────────
+
+  function handleStartRun(): void {
+    if (fsm.state !== "betting") return;
+
+    endAfterClaim         = false;
+    postClaimSpinRequired = false;
+    run.configure(economy.anteEnabled);
+    run.resetRun();
+    economy.resetRun();
+    cards.resetRun(); // also clears almostShownIds
+    model.resetOffsets();
+    model.resetLocks();
+    spinController.reset();
+    devDrawer.devPanel.clearLastSpin();
+    for (let i = 0; i < REEL_COUNT; i++) updateLockOverlay(reelViews[i], false);
+
+    fsm.transition("idle");
+
+    refreshAllReels();
+    devDrawer.devPanel.refreshInfo();
+    // Auto-spin at run start — first spin happens immediately.
+    doSpin();
+  }
+
+  function handleReturnToBetting(): void {
+    if (fsm.state !== "ended") return;
+    fsm.transition("betting");
+    betPanel.refresh();
+  }
+
+  // ── Card helpers ────────────────────────────────────────────────────────────
+
+  /** Centralised card-grid refresh. Passes current available/claimed/almost sets. */
+  function refreshAllCards(): void {
+    cardGrid.updateCards(cards.availableIds, cards.claimedIds, cards.almostShownIds);
+    cardGrid.updateSummary(economy.totalWin, cards.claimedIds.size, economy.baseBet);
+    runPanel.refresh(economy.totalWin, cards.claimedIds.size);
+  }
+
+  /**
+   * Re-evaluate card READY/ALMOST states from the current visible digits and
+   * repaint the card grid.  Call this whenever digits change outside a full spin
+   * (nudge, offset reset, etc.).  Does NOT touch RNG or spin state.
+   */
+  function refreshCardsFromCurrentDigits(): void {
+    const digits = model.getVisibleCenterDigits();
+    cards.onDigitsChanged(digits);
+    refreshAllCards();
+  }
+
+  /**
+   * Card click handler — claim-only path.
+   *
+   * Only AVAILABLE (green) cards are actionable; CardGrid already blocks clicks
+   * on non-available cards, but we double-check here for safety.
+   */
+  function handleCardClick(cardId: string): void {
+    const s = fsm.state;
+    if (s === "running" || s === "resolve" || s === "betting") return;
+    if (!cards.canClaim(cardId)) return;
+
+    // Stop any near-miss glow immediately — the spin state has changed.
+    if (_nmCancelFn) { _nmCancelFn(); _nmCancelFn = null; }
+
+    const { payoutMult, tier } = cards.claimOne(cardId);
+    economy.addWin(payoutMult);
+
+    if (tier >= 4) {
+      run.addActions(1);
+      if (s === "ended" && run.actions > 0) fsm.transition("idle");
+    }
+
+    // Update all cards (claimed card will be dim; all others lose "available").
+    refreshAllCards();
+    // Brief green flash on the just-claimed card.
+    cardGrid.flashClaimAnimation(cardId);
+
+    // Clear all reel locks so the next spin starts fresh.
+    model.resetLocks();
+    for (let i = 0; i < REEL_COUNT; i++) updateLockOverlay(reelViews[i], false);
+
+    // Block nudge/lock until the player spins again.
+    postClaimSpinRequired = true;
+    syncReelControls(fsm.state); // dim controls immediately
+
+    // If this was the final claim (last spin had drained actions to 0):
+    if (endAfterClaim) {
+      endAfterClaim = false;
+      if (run.actions === 0) {
+        // No bonus actions from this card — end the run now.
+        devDrawer.devPanel.refreshInfo();
+        syncReelControls(fsm.state);
+        fsm.transition("ended");
+        return;
+      }
+      // tier-2+ card restored an action — run continues with the normal flow below.
+    }
+
+    // almostShownIds is already cleared by claimOne(); check before refresh.
+    toast.show("LOCKS CLEARED  •  SPIN TO CONTINUE", { duration: 1200 });
+
+    devDrawer.devPanel.refreshInfo();
+    syncReelControls(fsm.state);
+
+    if (fsm.state === "ended") refreshEndOverlay();
+  }
+
+  // ── FSM listener ─────────────────────────────────────────────────────────────
+  fsm.onChange((_, next) => {
+    devDrawer.devPanel.syncState(next);
+    devDrawer.devPanel.refreshInfo();
+    runPanel.syncState(next);
+    syncReelControls(next);
+
+    const animating = next === "running" || next === "resolve";
+    cardGrid.setSpin(animating);
+    devDrawer.setSpinLocked(animating);
+
+    applyVisibility(next);
+  });
+
+  // ── Refresh helpers ──────────────────────────────────────────────────────────
+  function refreshAllReels(): void {
+    for (let i = 0; i < REEL_COUNT; i++) {
+      updateReelView(reelViews[i], model.reels[i].getVisible());
+      updateLockOverlay(reelViews[i], model.isLocked(i));
+    }
+    // Card availability is computed in doSpin's onSpinResolved callback — not here.
+    refreshAllCards();
+    syncReelControls(fsm.state); // keeps nudge enable in sync with actions count
+  }
+
+  // ── End overlay (function declaration — hoisted, called above) ──────────────
+  interface EndOverlay {
+    container:  Container;
+    winText:    Text;
+    betText:    Text;
+    profitText: Text;
+  }
+
+  function buildEndOverlay(): EndOverlay {
+    const c = new Container();
+    const OW = 340, OH = 180;
+
+    const bg = new Graphics();
+    bg.roundRect(0, 0, OW, OH, 10);
+    bg.fill({ color: 0x0a0a20, alpha: 0.95 });
+    bg.stroke({ color: 0xff4444, width: 2 });
+    bg.eventMode = "none";
+    c.addChild(bg);
+
+    const t = new Text({ text: "RUN FINISHED", style: END_TITLE_STYLE });
+    t.anchor.set(0.5, 0); t.x = OW / 2; t.y = 14;
+    c.addChild(t);
+
+    const winText = new Text({ text: "", style: END_STAT_STYLE });
+    winText.anchor.set(0.5, 0); winText.x = OW / 2; winText.y = 50;
+    c.addChild(winText);
+
+    const betText = new Text({ text: "", style: END_STAT_STYLE });
+    betText.anchor.set(0.5, 0); betText.x = OW / 2; betText.y = 72;
+    c.addChild(betText);
+
+    const profitText = new Text({ text: "", style: END_PROFIT_POS });
+    profitText.anchor.set(0.5, 0); profitText.x = OW / 2; profitText.y = 98;
+    c.addChild(profitText);
+
+    const btnW = 220, btnH = 32;
+    const btn  = new Container();
+    btn.eventMode = "static"; btn.cursor = "pointer";
+    const bBg = new Graphics();
+    bBg.roundRect(0, 0, btnW, btnH, 5);
+    bBg.fill({ color: 0x333366 }); bBg.stroke({ color: 0x6666cc, width: 2 });
+    btn.addChild(bBg);
+    const bTxt = new Text({ text: "RETURN TO BETTING", style: END_BTN_STYLE });
+    bTxt.x = Math.round((btnW - bTxt.width) / 2);
+    bTxt.y = Math.round((btnH - bTxt.height) / 2);
+    btn.addChild(bTxt);
+    btn.on("pointerdown", (e: FederatedPointerEvent) => { e.stopPropagation(); handleReturnToBetting(); });
+    btn.on("pointerover", () => { bBg.tint = 0xaaaaff; });
+    btn.on("pointerout",  () => { bBg.tint = 0xffffff; });
+    btn.x = Math.round((OW - btnW) / 2);
+    btn.y = OH - btnH - 12;
+    c.addChild(btn);
+
+    return { container: c, winText, betText, profitText };
+  }
+
+  function refreshEndOverlay(): void {
+    endOverlayData.winText.text = `Total Win: ${economy.totalWin.toFixed(2)} FUN`;
+    endOverlayData.betText.text = `Total Bet: ${economy.totalBet.toFixed(2)} FUN`;
+    const p = economy.profit;
+    endOverlayData.profitText.text  = `Profit: ${p >= 0 ? "+" : ""}${p.toFixed(2)} FUN`;
+    endOverlayData.profitText.style = p >= 0 ? END_PROFIT_POS : END_PROFIT_NEG;
+  }
+
+  // ── Layout ──────────────────────────────────────────────────────────────────
+  function layout(): void {
+    // Read window dimensions directly — PixiJS queues its internal renderer
+    // resize via requestAnimationFrame, so app.screen.width/height may still
+    // hold old values when the window "resize" event fires.
+    const w = window.innerWidth;
+    const h = window.innerHeight;
+
+    const cfg = computeLayout(w, h);
+
+    // Scale the entire game world — all internal positions stay untouched.
+    gameRoot.x = cfg.rootX;
+    gameRoot.y = cfg.rootY;
+    gameRoot.scale.set(cfg.scale);
+
+    // End overlay lives on app.stage (not inside gameRoot) so it needs its own
+    // screen-space position and scale to stay in sync with the scaled gameRoot.
+    const s  = cfg.scale;
+    const eoW = 340 * s;
+    const eoH = 180 * s;
+    endOverlay.scale.set(s);
+    endOverlay.x = Math.round((w - eoW) / 2);
+    // Vertically: same screen y as the top of the reel box inside gameRoot.
+    endOverlay.y = Math.round(cfg.rootY + (REEL_SLOT_Y + CTRL_ABOVE) * s);
+    void eoH; // referenced for documentation; PixiJS uses it via scale
+
+    devDrawer.resize(w, h);
+
+    // "?" button: top-right corner of the canvas, above the DevDrawer handle.
+    rulesBtn.x = w - RBTN_SIZE - 8;
+    rulesBtn.y = 8;
+  }
+
+  // ── "?" rules button (always visible, top-right corner) ─────────────────────
+  const rulesBtn        = new Container();
+  rulesBtn.eventMode    = "static";
+  rulesBtn.cursor       = "pointer";
+
+  const rulesBtnBg = new Graphics();
+  const RBTN_SIZE  = 28;
+  rulesBtnBg.roundRect(0, 0, RBTN_SIZE, RBTN_SIZE, 6);
+  rulesBtnBg.fill({ color: 0x1a1a3a });
+  rulesBtnBg.stroke({ color: 0x3a3a6a, width: 1 });
+  rulesBtn.addChild(rulesBtnBg);
+
+  const rulesBtnTxt = new Text({
+    text: "?",
+    style: new TextStyle({ fontFamily: "Arial, sans-serif", fontSize: 16, fill: 0x7777cc, fontWeight: "bold" }),
+  });
+  rulesBtnTxt.anchor.set(0.5, 0.5);
+  rulesBtnTxt.x = RBTN_SIZE / 2;
+  rulesBtnTxt.y = RBTN_SIZE / 2;
+  rulesBtn.addChild(rulesBtnTxt);
+
+  rulesBtn.on("pointerover", () => { rulesBtnBg.tint = 0xaaaaff; });
+  rulesBtn.on("pointerout",  () => { rulesBtnBg.tint = 0xffffff; });
+  rulesBtn.on("pointerdown", (e: FederatedPointerEvent) => {
+    e.stopPropagation();
+    // Show rules as overlay; clicking PLAY / CLOSE removes it.
+    const overlay = new RulesScreen();
+    overlay.layout(app.screen.width, app.screen.height);
+    app.stage.addChild(overlay);
+    const onR = () => overlay.layout(app.screen.width, app.screen.height);
+    window.addEventListener("resize", onR);
+    overlay.onPlay = () => {
+      window.removeEventListener("resize", onR);
+      app.stage.removeChild(overlay);
+      overlay.destroy({ children: true });
+    };
+  });
+  // Positioned in layout()
+  app.stage.addChild(rulesBtn);
+
+  // ── Boot ────────────────────────────────────────────────────────────────────
+  refreshAllReels();
+  devDrawer.devPanel.refreshInfo();
+  devDrawer.devPanel.syncState(fsm.state);
+  runPanel.syncState(fsm.state);
+
+  applyVisibility(fsm.state); // starts in "betting"
+  syncReelControls(fsm.state);
+
+  layout();
+  window.addEventListener("resize", layout);
+}
+
+main();
